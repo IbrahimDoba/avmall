@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
@@ -7,6 +8,8 @@ import {
   getProductBySlug,
   getRelatedProducts,
 } from "@/lib/data/products";
+import { formatMoney } from "@/lib/money";
+import { SITE } from "@/lib/site";
 import { PDPDetail } from "./detail";
 
 // PDPs are DB-backed (price, stock, variants change). Defer to runtime + ISR.
@@ -17,6 +20,36 @@ interface PDPProps {
   params: { slug: string };
 }
 
+export async function generateMetadata({ params }: PDPProps): Promise<Metadata> {
+  const product = await getProductBySlug(params.slug);
+  if (!product) {
+    return { title: "Product not found" };
+  }
+  const priceKobo = product.saleActive && product.sale != null ? product.sale : product.price;
+  const description = `${product.short} · From ${formatMoney(priceKobo)} · ${product.brand} on ${SITE.name}.`;
+  const url = `/product/${product.slug}`;
+  return {
+    title: `${product.name} · ${product.brand}`,
+    description,
+    alternates: { canonical: url },
+    openGraph: {
+      type: "website",
+      url,
+      title: `${product.name} · ${product.brand}`,
+      description,
+      ...(product.imageUrl && {
+        images: [{ url: product.imageUrl, alt: product.name }],
+      }),
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: `${product.name} · ${product.brand}`,
+      description,
+      ...(product.imageUrl && { images: [product.imageUrl] }),
+    },
+  };
+}
+
 export default async function PDPPage({ params }: PDPProps) {
   const product = await getProductBySlug(params.slug);
   if (!product) notFound();
@@ -24,8 +57,42 @@ export default async function PDPPage({ params }: PDPProps) {
   const related = await getRelatedProducts(product, 4);
   const gallery = product.gallery ?? [product.imageUrl];
 
+  // Schema.org Product — feeds Google rich snippets (price, availability, rating).
+  const priceKobo = product.saleActive && product.sale != null ? product.sale : product.price;
+  const inStock = (product.stock ?? 0) > 0 || product.preorder;
+  const productSchema = {
+    "@context": "https://schema.org/",
+    "@type": "Product",
+    name: product.name,
+    description: product.short,
+    sku: product.slug.toUpperCase(),
+    brand: { "@type": "Brand", name: product.brand },
+    ...(product.imageUrl && { image: gallery.filter(Boolean) }),
+    offers: {
+      "@type": "Offer",
+      url: `${SITE.url}/product/${product.slug}`,
+      priceCurrency: "NGN",
+      price: (priceKobo / 100).toFixed(2),
+      availability: inStock
+        ? "https://schema.org/InStock"
+        : "https://schema.org/OutOfStock",
+      itemCondition: "https://schema.org/NewCondition",
+    },
+    ...(product.rating != null && product.reviews != null && product.reviews > 0 && {
+      aggregateRating: {
+        "@type": "AggregateRating",
+        ratingValue: product.rating,
+        reviewCount: product.reviews,
+      },
+    }),
+  };
+
   return (
     <div className="mx-auto max-w-7xl px-4 lg:px-6 py-6 lg:py-10">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(productSchema) }}
+      />
       {/* Breadcrumb */}
       <nav className="flex items-center gap-1.5 text-xs text-fg-muted mb-5">
         <Link href="/" className="hover:text-fg">

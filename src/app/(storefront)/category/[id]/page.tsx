@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
@@ -6,6 +7,7 @@ import {
   getCategoryBySlug,
   listProducts,
 } from "@/lib/data/products";
+import { SITE } from "@/lib/site";
 import { CategoryToolbar } from "./toolbar";
 import { CategorySidebar } from "./sidebar";
 
@@ -16,6 +18,21 @@ export const dynamic = "force-dynamic";
 
 interface CategoryPageProps {
   params: { id: string };
+}
+
+export async function generateMetadata({ params }: CategoryPageProps): Promise<Metadata> {
+  const category = await getCategoryBySlug(params.id);
+  if (!category) return { title: "Category not found" };
+  const title = `${category.name} — shop ${category.count ?? ""} products`.trim();
+  const description = `Shop ${category.name.toLowerCase()} on ${SITE.name} — curated from Nigerian makers, with same-day Lagos delivery and 14-day returns.`;
+  const url = `/category/${category.id}`;
+  return {
+    title,
+    description,
+    alternates: { canonical: url },
+    openGraph: { type: "website", url, title, description },
+    twitter: { card: "summary_large_image", title, description },
+  };
 }
 
 export default async function CategoryPage({ params }: CategoryPageProps) {

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ShoppingBag, Search, Menu, User, MessageCircle, X } from "lucide-react";
 import { useCart } from "@/stores/cart-store";
 import { CATEGORIES } from "@/lib/mock-data";
+import { SITE } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 const NAV_LINKS = [
@@ -26,13 +27,18 @@ export function TopNav() {
         {/* Top utility strip (desktop only) */}
         <div className="hidden lg:block border-b border-border">
           <div className="mx-auto max-w-7xl px-6 h-9 flex items-center gap-5 text-xs text-fg-muted">
-            <span>Free shipping on orders over ₦50,000 in Lagos</span>
+            <span>Free shipping on orders over ₦25,000 in Lagos</span>
             <span className="ml-auto">NGN ₦</span>
-            <Link href="#" className="hover:text-fg">Help</Link>
-            <Link href="#" className="hover:text-fg">Track order</Link>
-            <span className="inline-flex items-center gap-1.5">
+            <Link href="/faq" className="hover:text-fg">Help</Link>
+            <Link href="/track-order" className="hover:text-fg">Track order</Link>
+            <a
+              href={SITE.social.whatsapp}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="inline-flex items-center gap-1.5 hover:text-fg"
+            >
               <MessageCircle className="size-3" /> WhatsApp us
-            </span>
+            </a>
           </div>
         </div>
 
@@ -62,8 +68,8 @@ export function TopNav() {
                 {l.label}
               </Link>
             ))}
-            <Link href="#" className="text-brand-accent font-semibold hover:text-brand-accent-hover">
-              Sale
+            <Link href="/journal" className="hover:text-brand-primary transition-colors">
+              Journal
             </Link>
           </nav>
 
@@ -179,12 +185,52 @@ function MobileDrawer({ open, onClose }: { open: boolean; onClose: () => void })
           >
             Orders
           </Link>
-          <Link
-            href="#"
+          <a
+            href={SITE.social.whatsapp}
+            target="_blank"
+            rel="noreferrer noopener"
             onClick={onClose}
             className="py-3 text-base font-medium hover:text-brand-primary border-b border-border inline-flex items-center gap-2"
           >
             <MessageCircle className="size-4" /> WhatsApp support
+          </a>
+          <Link
+            href="/track-order"
+            onClick={onClose}
+            className="py-3 text-base font-medium hover:text-brand-primary border-b border-border"
+          >
+            Track order
+          </Link>
+          <div className="text-[11px] font-bold uppercase tracking-wider text-fg-muted mb-2 mt-6">
+            Help
+          </div>
+          <Link
+            href="/faq"
+            onClick={onClose}
+            className="py-3 text-base font-medium hover:text-brand-primary border-b border-border"
+          >
+            FAQ
+          </Link>
+          <Link
+            href="/shipping"
+            onClick={onClose}
+            className="py-3 text-base font-medium hover:text-brand-primary border-b border-border"
+          >
+            Shipping
+          </Link>
+          <Link
+            href="/returns"
+            onClick={onClose}
+            className="py-3 text-base font-medium hover:text-brand-primary border-b border-border"
+          >
+            Returns
+          </Link>
+          <Link
+            href="/contact"
+            onClick={onClose}
+            className="py-3 text-base font-medium hover:text-brand-primary border-b border-border"
+          >
+            Contact
           </Link>
         </nav>
       </aside>
