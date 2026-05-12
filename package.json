@@ -12,10 +12,11 @@
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf .next .turbo",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:deploy": "prisma migrate deploy",
-    "db:seed": "prisma db seed",
-    "db:studio": "prisma studio",
+    "db:migrate": "dotenv -e .env.local -- prisma migrate dev",
+    "db:deploy": "dotenv -e .env.local -- prisma migrate deploy",
+    "db:seed": "dotenv -e .env.local -- prisma db seed",
+    "db:studio": "dotenv -e .env.local -- prisma studio",
+    "db:push": "dotenv -e .env.local -- prisma db push",
     "postinstall": "prisma generate"
   },
   "prisma": {
@@ -73,6 +74,7 @@
     "@types/react": "18.3.18",
     "@types/react-dom": "18.3.5",
     "autoprefixer": "10.4.20",
+    "dotenv-cli": "7.4.4",
     "eslint": "8.57.1",
     "eslint-config-next": "14.2.33",
     "postcss": "8.4.49",
