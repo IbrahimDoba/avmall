@@ -3,7 +3,9 @@
 /**
  * Cart store (Phase 2 client-only — will be replaced by server cart API in Phase 4).
  * Mirrors the future server contract: line items + qty, totals computed via the quote endpoint.
- * For now, the client computes the quote locally using mock product data.
+ * For now, the client computes the quote locally using a product snapshot stored on
+ * each line at add-time. The snapshot is what makes the cart work for products
+ * created at runtime in the DB (whose UUIDs aren't in the mock catalogue).
  *
  * See CLAUDE.md §12 — production cart is server-managed via POST /api/v1/cart/:id/quote.
  */
@@ -13,16 +15,27 @@ import { persist } from "zustand/middleware";
 import { PRODUCTS, type Product, type ProductVariant } from "@/lib/mock-data";
 import { applyPercentageDiscount } from "@/lib/money";
 
+export interface CartLineSnapshot {
+  slug: string;
+  name: string;
+  brand: string;
+  imageUrl: string;
+  bg: string;
+  variantLabel: string;
+  unitKobo: number;
+  bulk: { min: number; max: number | null; type: "percentage" | "fixed"; value: number }[];
+}
+
 export interface CartLine {
   productId: string;
   variantId: string;
   qty: number;
+  /** Snapshot is optional only because v1 lines in localStorage didn't have it. */
+  snapshot?: CartLineSnapshot;
 }
 
 export interface ResolvedCartLine extends CartLine {
-  product: Product;
-  variant: ProductVariant;
-  unitKobo: number;
+  snapshot: CartLineSnapshot;
   lineSubtotalKobo: number;
   bulkPct: number;
   bulkLabel: string | null;
@@ -32,33 +45,62 @@ export interface ResolvedCartLine extends CartLine {
 
 interface CartState {
   lines: CartLine[];
-  add: (productId: string, variantId: string, qty?: number) => void;
+  add: (product: Product, variantId: string, qty?: number) => void;
   remove: (productId: string, variantId: string) => void;
   setQty: (productId: string, variantId: string, qty: number) => void;
   clear: () => void;
 }
 
-const SEED_LINES: CartLine[] = [
-  { productId: "p2", variantId: "va", qty: 2 },
-  { productId: "p5", variantId: "g500", qty: 1 },
-];
+function snapshotFor(product: Product, variant: ProductVariant): CartLineSnapshot {
+  const unitKobo =
+    variant.price ??
+    (product.saleActive && product.sale != null ? product.sale : product.price);
+  return {
+    slug: product.slug,
+    name: product.name,
+    brand: product.brand,
+    imageUrl: product.imageUrl,
+    bg: product.bg,
+    variantLabel: variant.label,
+    unitKobo,
+    bulk: product.bulk.map((t) => ({
+      min: t.min,
+      max: t.max,
+      type: t.type,
+      value: t.value,
+    })),
+  };
+}
 
 export const useCart = create<CartState>()(
   persist(
     (set) => ({
-      lines: SEED_LINES,
-      add: (productId, variantId, qty = 1) =>
+      lines: [],
+      add: (product, variantId, qty = 1) =>
         set((state) => {
+          const variant =
+            product.variants.find((v) => v.id === variantId) ?? product.variants[0];
+          if (!variant) return state;
+          const snap = snapshotFor(product, variant);
           const idx = state.lines.findIndex(
-            (l) => l.productId === productId && l.variantId === variantId,
+            (l) => l.productId === product.id && l.variantId === variantId,
           );
           if (idx >= 0) {
             const next = [...state.lines];
             const existing = next[idx]!;
-            next[idx] = { ...existing, qty: existing.qty + qty };
+            next[idx] = {
+              ...existing,
+              qty: existing.qty + qty,
+              snapshot: snap, // refresh snapshot on re-add (price may have changed)
+            };
             return { lines: next };
           }
-          return { lines: [...state.lines, { productId, variantId, qty }] };
+          return {
+            lines: [
+              ...state.lines,
+              { productId: product.id, variantId, qty, snapshot: snap },
+            ],
+          };
         }),
       remove: (productId, variantId) =>
         set((state) => ({
@@ -76,24 +118,38 @@ export const useCart = create<CartState>()(
         })),
       clear: () => set({ lines: [] }),
     }),
-    { name: "avmall-cart", version: 1 },
+    {
+      name: "avmall-cart",
+      // v2 introduced per-line snapshots. v1 lines (just {productId, variantId, qty})
+      // can't resolve against DB-created products, so we drop them on upgrade.
+      version: 2,
+      migrate: () => ({ lines: [] as CartLine[] }),
+    },
   ),
 );
 
-/** Resolve cart lines against the product catalogue and apply bulk pricing. */
+/**
+ * Resolve cart lines: prefer the per-line snapshot, fall back to the mock
+ * catalogue only for legacy lines (rare — anything added since v2 has a snapshot).
+ */
 export function resolveCart(lines: CartLine[]): ResolvedCartLine[] {
   return lines.flatMap((line) => {
-    const product = PRODUCTS.find((p) => p.id === line.productId);
-    if (!product) return [];
-    const variant = product.variants.find((v) => v.id === line.variantId);
-    if (!variant) return [];
+    let snap = line.snapshot;
 
-    const unitKobo = variant.price ?? (product.saleActive && product.sale ? product.sale : product.price);
-    const lineSubtotalKobo = unitKobo * line.qty;
+    if (!snap) {
+      // Legacy path: try the mock catalogue. Will return [] for DB UUIDs.
+      const product = PRODUCTS.find((p) => p.id === line.productId);
+      if (!product) return [];
+      const variant = product.variants.find((v) => v.id === line.variantId);
+      if (!variant) return [];
+      snap = snapshotFor(product, variant);
+    }
+
+    const lineSubtotalKobo = snap.unitKobo * line.qty;
 
     let bulkPct = 0;
     let bulkLabel: string | null = null;
-    for (const tier of product.bulk) {
+    for (const tier of snap.bulk) {
       if (line.qty >= tier.min && (tier.max == null || line.qty <= tier.max)) {
         bulkPct = tier.value;
         bulkLabel = `${tier.value}% off (${tier.min}+)`;
@@ -105,9 +161,7 @@ export function resolveCart(lines: CartLine[]): ResolvedCartLine[] {
     return [
       {
         ...line,
-        product,
-        variant,
-        unitKobo,
+        snapshot: snap,
         lineSubtotalKobo,
         bulkPct,
         bulkLabel,

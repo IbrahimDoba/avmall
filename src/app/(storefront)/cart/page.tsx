@@ -72,28 +72,30 @@ export default function CartPage() {
               className="grid grid-cols-[88px_1fr_auto] lg:grid-cols-[88px_1fr_120px_140px_140px_40px] gap-3 lg:gap-4 py-5 border-b border-border items-center"
             >
               <Link
-                href={`/product/${line.product.slug}`}
+                href={`/product/${line.snapshot.slug}`}
                 className="relative size-22 w-22 h-22 lg:size-20 lg:w-20 lg:h-20 rounded-md overflow-hidden bg-surface-2"
-                style={{ background: line.product.bg }}
+                style={{ background: line.snapshot.bg }}
               >
-                <Image
-                  src={line.product.imageUrl}
-                  alt={line.product.name}
-                  fill
-                  sizes="88px"
-                  className="object-cover"
-                />
+                {line.snapshot.imageUrl && (
+                  <Image
+                    src={line.snapshot.imageUrl}
+                    alt={line.snapshot.name}
+                    fill
+                    sizes="88px"
+                    className="object-cover"
+                  />
+                )}
               </Link>
 
               <div className="min-w-0 col-start-2 lg:col-auto">
                 <Link
-                  href={`/product/${line.product.slug}`}
+                  href={`/product/${line.snapshot.slug}`}
                   className="text-sm lg:text-base font-semibold leading-snug line-clamp-2 hover:text-brand-primary"
                 >
-                  {line.product.name}
+                  {line.snapshot.name}
                 </Link>
                 <div className="text-xs text-fg-muted mt-0.5">
-                  {line.variant.label} · {line.product.brand}
+                  {line.snapshot.variantLabel} · {line.snapshot.brand}
                 </div>
                 {line.bulkLabel && (
                   <div className="text-xs font-semibold text-brand-accent mt-1">
@@ -132,7 +134,7 @@ export default function CartPage() {
 
               {/* Desktop unit */}
               <div className="hidden lg:block text-right">
-                <Money kobo={line.unitKobo} className="text-sm font-semibold" />
+                <Money kobo={line.snapshot.unitKobo} className="text-sm font-semibold" />
               </div>
 
               {/* Desktop total */}

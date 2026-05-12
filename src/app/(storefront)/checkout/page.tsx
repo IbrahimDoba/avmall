@@ -265,24 +265,26 @@ export default function CheckoutPage() {
                 >
                   <div
                     className="relative size-14 flex-shrink-0 rounded-md overflow-hidden"
-                    style={{ background: l.product.bg }}
+                    style={{ background: l.snapshot.bg }}
                   >
-                    <Image
-                      src={l.product.imageUrl}
-                      alt={l.product.name}
-                      fill
-                      sizes="56px"
-                      className="object-cover"
-                    />
+                    {l.snapshot.imageUrl && (
+                      <Image
+                        src={l.snapshot.imageUrl}
+                        alt={l.snapshot.name}
+                        fill
+                        sizes="56px"
+                        className="object-cover"
+                      />
+                    )}
                     <span className="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full bg-fg text-bg text-[10px] font-bold tabular">
                       {l.qty}
                     </span>
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-xs font-semibold leading-snug line-clamp-1">
-                      {l.product.name}
+                      {l.snapshot.name}
                     </div>
-                    <div className="text-[11px] text-fg-muted">{l.variant.label}</div>
+                    <div className="text-[11px] text-fg-muted">{l.snapshot.variantLabel}</div>
                   </div>
                   <Money kobo={l.lineTotalKobo} className="text-xs font-semibold flex-shrink-0" />
                 </div>

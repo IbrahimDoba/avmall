@@ -40,7 +40,7 @@ export function PDPDetail({ product }: { product: Product }) {
 
   function handleAdd() {
     if (oos) return;
-    add(product.id, variantId, qty);
+    add(product, variantId, qty);
     toast.success(`${product.name} added to cart`);
     router.push("/cart");
   }
