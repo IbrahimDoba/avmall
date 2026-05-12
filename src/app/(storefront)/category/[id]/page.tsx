@@ -3,17 +3,16 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { ProductCard } from "@/components/storefront/product-card";
 import {
-  listCategories,
   getCategoryBySlug,
   listProducts,
 } from "@/lib/data/products";
 import { CategoryToolbar } from "./toolbar";
 import { CategorySidebar } from "./sidebar";
 
-export async function generateStaticParams() {
-  const cats = await listCategories();
-  return cats.map((c) => ({ id: c.id }));
-}
+// Defer to request time — Neon cold-start retries make build-time prerender
+// flaky. ISR (revalidate=300) keeps the page cached server-side.
+export const revalidate = 300;
+export const dynamic = "force-dynamic";
 
 interface CategoryPageProps {
   params: { id: string };

@@ -12,6 +12,11 @@ import { Button } from "@/components/ui/button";
 import { ProductCard } from "@/components/storefront/product-card";
 import { listProducts } from "@/lib/data/products";
 
+// Live product data — revalidate every 5 min so first request after a cold
+// Neon wake-up isn't a hard prerender failure during build.
+export const revalidate = 300;
+export const dynamic = "force-dynamic";
+
 const TRUST_ITEMS = [
   { t: "Same-day Lagos", s: "Order before 1pm" },
   { t: "Pay your way", s: "Nuqood · transfer · POS · cash" },

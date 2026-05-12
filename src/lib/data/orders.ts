@@ -11,10 +11,26 @@ import {
   ORDER_PAYMENTS as MOCK_PAYMENTS,
   type OrderListRow,
 } from "@/lib/admin-mock-data";
+import { PRODUCTS } from "@/lib/mock-data";
 import type {
   OrderStatus,
   PaymentStatus,
 } from "@/components/ui/status-pill";
+
+/** Best-effort image lookup for order line items. Phase 5 will read
+ *  ProductImage rows tied to R2 keys; for now we map by SKU prefix to the
+ *  seeded demo set so order lines always have a thumbnail. */
+function lineImageFor(skuOrSlug: string): string {
+  const fromSlug = PRODUCTS.find((p) => p.slug === skuOrSlug);
+  if (fromSlug) return fromSlug.imageUrl;
+  const upper = skuOrSlug.toUpperCase();
+  const fromBrand = PRODUCTS.find((p) =>
+    upper.startsWith(p.brand.slice(0, 3).toUpperCase()),
+  );
+  if (fromBrand) return fromBrand.imageUrl;
+  // Deterministic placeholder when nothing matches.
+  return `https://picsum.photos/seed/${encodeURIComponent(skuOrSlug)}/200/200`;
+}
 
 export type { OrderListRow };
 
@@ -203,7 +219,7 @@ export async function getAdminOrder(number: string): Promise<OrderDetail | null>
       unitKobo: Number(l.unitKobo),
       bulkDiscountKobo: Number(l.bulkDiscountKobo),
       bulkTierLabel: l.bulkTierLabel,
-      imageUrl: "", // Phase 5: ProductImage rows
+      imageUrl: lineImageFor(l.product?.slug ?? l.skuSnapshot),
     })),
     payments: o.payments.map((p) => ({
       id: p.id,

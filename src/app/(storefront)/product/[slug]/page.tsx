@@ -6,14 +6,12 @@ import { ProductCard } from "@/components/storefront/product-card";
 import {
   getProductBySlug,
   getRelatedProducts,
-  listAllProductSlugs,
 } from "@/lib/data/products";
 import { PDPDetail } from "./detail";
 
-export async function generateStaticParams() {
-  const slugs = await listAllProductSlugs();
-  return slugs.map((slug) => ({ slug }));
-}
+// PDPs are DB-backed (price, stock, variants change). Defer to runtime + ISR.
+export const revalidate = 300;
+export const dynamic = "force-dynamic";
 
 interface PDPProps {
   params: { slug: string };
@@ -41,16 +39,16 @@ export default async function PDPPage({ params }: PDPProps) {
         <span className="text-fg font-medium truncate">{product.name}</span>
       </nav>
 
-      <div className="grid lg:grid-cols-[1.05fr_0.95fr] gap-8 lg:gap-14">
-        {/* Gallery */}
-        <div className="flex flex-col lg:flex-row-reverse gap-3 lg:gap-4">
-          <div className="relative w-full aspect-square overflow-hidden rounded-xl bg-surface-2">
+      <div className="grid lg:grid-cols-[minmax(0,520px)_1fr] gap-8 lg:gap-14 items-start">
+        {/* Gallery — capped so it doesn't dominate the viewport on wide screens */}
+        <div className="flex flex-col lg:flex-row-reverse gap-3 lg:gap-4 lg:sticky lg:top-24">
+          <div className="relative w-full aspect-square overflow-hidden rounded-xl bg-surface-2 max-h-[520px]">
             <Image
               src={gallery[0]!}
               alt={product.name}
               fill
               priority
-              sizes="(min-width: 1024px) 50vw, 100vw"
+              sizes="(min-width: 1024px) 520px, 100vw"
               className="object-cover"
             />
           </div>
@@ -59,7 +57,7 @@ export default async function PDPPage({ params }: PDPProps) {
               {gallery.slice(0, 4).map((g, i) => (
                 <div
                   key={i}
-                  className={`relative size-16 lg:size-20 rounded-md overflow-hidden border-2 cursor-pointer ${
+                  className={`relative size-16 lg:size-20 rounded-md overflow-hidden border-2 cursor-pointer flex-shrink-0 ${
                     i === 0 ? "border-fg" : "border-transparent"
                   }`}
                 >

@@ -9,7 +9,8 @@
 
 import "server-only";
 
-import { db, hasDatabase } from "@/lib/db";
+import { cache } from "react";
+import { db, hasDatabase, withRetry } from "@/lib/db";
 import {
   PRODUCTS as MOCK_PRODUCTS,
   CATEGORIES as MOCK_CATEGORIES,
@@ -23,11 +24,13 @@ import type {
   Product as DbProduct,
   ProductVariant as DbVariant,
   BulkTier as DbBulkTier,
+  Category as DbCategoryRow,
 } from "@prisma/client";
 
 type DbProductWith = DbProduct & {
   variants: DbVariant[];
   bulkTiers: DbBulkTier[];
+  category: DbCategoryRow;
 };
 
 /** Convert a Prisma product (with relations) into the view-shape used by pages. */
@@ -70,11 +73,14 @@ function productFromDb(p: DbProductWith): Product {
 
 /**
  * Reuse the Unsplash URL stored in mock-data for the same slug. Phase 5 will
- * read R2 image keys off ProductImage rows; for now we lean on the demo set.
+ * read R2 image keys off ProductImage rows; for now we lean on the demo set
+ * with a deterministic picsum.photos fallback for products created via
+ * /admin/products/new (which won't match any mock slug).
  */
 function defaultImageFor(slug: string): string {
   const m = MOCK_PRODUCTS.find((p) => p.slug === slug);
-  return m?.imageUrl ?? "";
+  if (m) return m.imageUrl;
+  return `https://picsum.photos/seed/${encodeURIComponent(slug)}/800/800`;
 }
 
 function gallerySlugLookup(slug: string): string[] | undefined {
@@ -87,10 +93,11 @@ function gallerySlugLookup(slug: string): string[] | undefined {
  * `product.category` access keeps working. Prisma gives us a relation, not a
  * scalar slug — we look it up via the include + categoryById map.
  */
-function withCategorySlug(p: DbProductWith, slugByCategoryId: Map<string, ProductCategoryId>): Product {
+/** Sets the category slug + mock gallery on the converted product. Category
+ *  is now loaded via Prisma `include`, so no follow-up query needed. */
+function finalize(p: DbProductWith): Product {
   const view = productFromDb(p);
-  const slug = slugByCategoryId.get(p.categoryId);
-  if (slug) view.category = slug;
+  view.category = p.category.slug as ProductCategoryId;
   const gallery = gallerySlugLookup(view.slug);
   if (gallery) view.gallery = gallery;
   return view;
@@ -98,42 +105,55 @@ function withCategorySlug(p: DbProductWith, slugByCategoryId: Map<string, Produc
 
 // ─── Categories ───────────────────────────────────────────────────────────
 
-export async function listCategories(): Promise<Category[]> {
-  if (!hasDatabase) {
-    return [...MOCK_CATEGORIES];
-  }
-  const cats = await db.category.findMany({ orderBy: { position: "asc" } });
-  const counts = await db.product.groupBy({
-    by: ["categoryId"],
-    where: { archivedAt: null, published: true },
-    _count: { _all: true },
-  });
-  const countByCat = new Map(counts.map((c) => [c.categoryId, c._count._all]));
+/**
+ * Categories — one query (with product `_count`) instead of two. Wrapped in
+ * React `cache` so two callers in the same request share the result.
+ */
+export const listCategories = cache(async (): Promise<Category[]> => {
+  if (!hasDatabase) return [...MOCK_CATEGORIES];
+
+  const cats = await withRetry(() =>
+    db.category.findMany({
+      orderBy: { position: "asc" },
+      include: {
+        _count: {
+          select: { products: { where: { archivedAt: null, published: true } } },
+        },
+      },
+    }),
+  );
   return cats.map((c) => ({
     id: c.slug as ProductCategoryId,
     name: c.name,
-    count: countByCat.get(c.id) ?? 0,
+    count: c._count.products,
   }));
-}
+});
 
-export async function getCategoryBySlug(slug: string): Promise<Category | null> {
-  if (!hasDatabase) {
-    return MOCK_CATEGORIES.find((c) => c.id === slug) ?? null;
-  }
-  const cat = await db.category.findUnique({ where: { slug } });
-  if (!cat) return null;
-  const count = await db.product.count({
-    where: { categoryId: cat.id, archivedAt: null, published: true },
-  });
-  return { id: cat.slug as ProductCategoryId, name: cat.name, count };
-}
+export const getCategoryBySlug = cache(
+  async (slug: string): Promise<Category | null> => {
+    if (!hasDatabase) {
+      return MOCK_CATEGORIES.find((c) => c.id === slug) ?? null;
+    }
+    const cat = await withRetry(() =>
+      db.category.findUnique({
+        where: { slug },
+        include: {
+          _count: {
+            select: { products: { where: { archivedAt: null, published: true } } },
+          },
+        },
+      }),
+    );
+    if (!cat) return null;
+    return {
+      id: cat.slug as ProductCategoryId,
+      name: cat.name,
+      count: cat._count.products,
+    };
+  },
+);
 
 // ─── Products ─────────────────────────────────────────────────────────────
-
-async function categorySlugMap(): Promise<Map<string, ProductCategoryId>> {
-  const cats = await db.category.findMany();
-  return new Map(cats.map((c) => [c.id, c.slug as ProductCategoryId]));
-}
 
 export async function listProducts(opts?: {
   category?: string;
@@ -153,30 +173,41 @@ export async function listProducts(opts?: {
     ...(!opts?.includeUnpublished && { archivedAt: null, published: true }),
     ...(opts?.category && { category: { slug: opts.category } }),
   };
-  const products = await db.product.findMany({
-    where,
-    include: { variants: { orderBy: { position: "asc" } }, bulkTiers: true },
-    orderBy: opts?.featuredFirst
-      ? [{ featured: "desc" as const }, { createdAt: "desc" as const }]
-      : [{ createdAt: "desc" as const }],
-    ...(opts?.limit != null && { take: opts.limit }),
-  });
+  // Single query — joins variants, bulkTiers, AND category in one round trip.
+  const products = await withRetry(() =>
+    db.product.findMany({
+      where,
+      include: {
+        variants: { orderBy: { position: "asc" } },
+        bulkTiers: true,
+        category: true,
+      },
+      orderBy: opts?.featuredFirst
+        ? [{ featured: "desc" as const }, { createdAt: "desc" as const }]
+        : [{ createdAt: "desc" as const }],
+      ...(opts?.limit != null && { take: opts.limit }),
+    }),
+  );
 
-  const slugBy = await categorySlugMap();
-  return products.map((p) => withCategorySlug(p as DbProductWith, slugBy));
+  return products.map((p) => finalize(p as DbProductWith));
 }
 
 export async function getProductBySlug(slug: string): Promise<Product | null> {
   if (!hasDatabase) {
     return MOCK_PRODUCTS.find((p) => p.slug === slug) ?? null;
   }
-  const p = await db.product.findUnique({
-    where: { slug },
-    include: { variants: { orderBy: { position: "asc" } }, bulkTiers: true },
-  });
+  const p = await withRetry(() =>
+    db.product.findUnique({
+      where: { slug },
+      include: {
+        variants: { orderBy: { position: "asc" } },
+        bulkTiers: true,
+        category: true,
+      },
+    }),
+  );
   if (!p || p.archivedAt) return null;
-  const slugBy = await categorySlugMap();
-  return withCategorySlug(p as DbProductWith, slugBy);
+  return finalize(p as DbProductWith);
 }
 
 export async function getRelatedProducts(
@@ -192,9 +223,11 @@ export async function listAllProductSlugs(): Promise<string[]> {
   if (!hasDatabase) {
     return MOCK_PRODUCTS.map((p) => p.slug);
   }
-  const rows = await db.product.findMany({
-    where: { archivedAt: null, published: true },
-    select: { slug: true },
-  });
+  const rows = await withRetry(() =>
+    db.product.findMany({
+      where: { archivedAt: null, published: true },
+      select: { slug: true },
+    }),
+  );
   return rows.map((r) => r.slug);
 }

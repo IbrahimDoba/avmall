@@ -20,6 +20,8 @@ const aspectClass: Record<Aspect, string> = {
 
 /**
  * Product image with a tinted gradient backdrop (visible through whitespace / while loading).
+ * When imageUrl is empty (newly created product, not yet attached to a R2 image)
+ * the gradient + brand letter stand alone.
  */
 export function ProductVisual({
   product,
@@ -28,6 +30,7 @@ export function ProductVisual({
   sizes = "(min-width: 1024px) 25vw, (min-width: 640px) 33vw, 50vw",
   className,
 }: ProductVisualProps) {
+  const hasImage = !!product.imageUrl && product.imageUrl.trim() !== "";
   return (
     <div
       className={cn(
@@ -37,14 +40,16 @@ export function ProductVisual({
       )}
       style={{ background: product.bg }}
     >
-      <Image
-        src={product.imageUrl}
-        alt={product.name}
-        fill
-        sizes={sizes}
-        priority={priority}
-        className="object-cover"
-      />
+      {hasImage ? (
+        <Image
+          src={product.imageUrl}
+          alt={product.name}
+          fill
+          sizes={sizes}
+          priority={priority}
+          className="object-cover"
+        />
+      ) : null}
     </div>
   );
 }
