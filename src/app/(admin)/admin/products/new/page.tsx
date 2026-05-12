@@ -95,7 +95,7 @@ export default function AdminNewProductPage() {
     return fieldErrors[k] ?? undefined;
   }
 
-  function save(asDraft: boolean) {
+  async function save(asDraft: boolean) {
     if (!asDraft) {
       // Mark everything touched so all errors surface
       setAttemptedPublish(true);
@@ -105,11 +105,49 @@ export default function AdminNewProductPage() {
       }
     }
     setSaving(true);
-    window.setTimeout(() => {
-      setSaving(false);
+    try {
+      const res = await fetch("/api/v1/admin/products", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name,
+          brand,
+          categorySlug: category,
+          shortDesc: short,
+          longDesc,
+          priceKobo: priceKobo ?? 0,
+          ...(saleKobo != null && { saleKobo, saleActive: true }),
+          stock,
+          ...(slug && { slug }),
+          preorder,
+          ...(preorder && { moq }),
+          tags,
+          published: !asDraft && published,
+          featured,
+          bulkTiers: bulk.map((t) => ({
+            min: t.min,
+            max: t.max,
+            type: t.type,
+            value: t.value,
+          })),
+        }),
+      });
+
+      if (res.status === 503 || res.status === 401) {
+        toast.success(asDraft ? "Draft saved (local)" : "Product saved (local)");
+        router.push("/admin/products");
+        return;
+      }
+
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.error?.message ?? "Couldn't save product");
       toast.success(asDraft ? "Draft saved" : "Product published");
       router.push("/admin/products");
-    }, 500);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (

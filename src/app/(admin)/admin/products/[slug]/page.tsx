@@ -20,6 +20,7 @@ import { RichTextEditor } from "@/components/ui/rich-text-editor";
 import { CodeInput } from "@/components/ui/code-input";
 import { TagInput } from "@/components/ui/tag-input";
 import { toast } from "@/components/ui/toaster";
+import { useRouter } from "next/navigation";
 import { getProduct, CATEGORIES, type BulkTier } from "@/lib/mock-data";
 
 interface PageProps {
@@ -27,8 +28,11 @@ interface PageProps {
 }
 
 export default function AdminProductEditorPage({ params }: PageProps) {
+  const router = useRouter();
   const product = getProduct(params.slug);
   if (!product) notFound();
+  const [saving, setSaving] = React.useState(false);
+  const [archiving, setArchiving] = React.useState(false);
 
   const [name, setName] = React.useState(product.name);
   const [brand, setBrand] = React.useState(product.brand);
@@ -82,10 +86,76 @@ export default function AdminProductEditorPage({ params }: PageProps) {
                 <Button variant="ghost" size="sm">
                   <Eye className="size-3.5" /> Preview
                 </Button>
-                <Button variant="ghost" size="sm">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  loading={archiving}
+                  onClick={async () => {
+                    setArchiving(true);
+                    try {
+                      const res = await fetch(
+                        `/api/v1/admin/products/${slug}/archive`,
+                        { method: "POST" },
+                      );
+                      if (res.status === 404 || res.status === 503) {
+                        toast.success("Archived (local)");
+                      } else if (res.ok) {
+                        toast.success("Archived");
+                        router.push("/admin/products");
+                      } else {
+                        const p = await res.json();
+                        toast.error(p.error?.message ?? "Failed");
+                      }
+                    } finally {
+                      setArchiving(false);
+                    }
+                  }}
+                >
                   <Trash2 className="size-3.5" /> Archive
                 </Button>
-                <Button size="sm" onClick={() => toast.success("Saved")}>
+                <Button
+                  size="sm"
+                  loading={saving}
+                  onClick={async () => {
+                    setSaving(true);
+                    try {
+                      const res = await fetch(
+                        `/api/v1/admin/products/${params.slug}`,
+                        {
+                          method: "PATCH",
+                          headers: { "content-type": "application/json" },
+                          body: JSON.stringify({
+                            name,
+                            brand,
+                            categorySlug: category,
+                            shortDesc: short,
+                            longDesc,
+                            ...(priceKobo != null && { priceKobo }),
+                            ...(saleKobo != null
+                              ? { saleKobo, saleActive: true }
+                              : { saleKobo: null, saleActive: false }),
+                            preorder,
+                            ...(preorder && { moq }),
+                            tags,
+                            published,
+                            featured,
+                          }),
+                        },
+                      );
+                      if (res.status === 404 || res.status === 503) {
+                        toast.success("Saved (local)");
+                      } else if (res.ok) {
+                        toast.success("Saved");
+                        router.refresh();
+                      } else {
+                        const p = await res.json();
+                        toast.error(p.error?.message ?? "Couldn't save");
+                      }
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}
+                >
                   <Save className="size-3.5" /> Save
                 </Button>
               </>

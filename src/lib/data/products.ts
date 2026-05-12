@@ -139,6 +139,8 @@ export async function listProducts(opts?: {
   category?: string;
   limit?: number;
   featuredFirst?: boolean;
+  /** Admin view — return unpublished and archived products too. */
+  includeUnpublished?: boolean;
 }): Promise<Product[]> {
   if (!hasDatabase) {
     let list = [...MOCK_PRODUCTS];
@@ -148,8 +150,7 @@ export async function listProducts(opts?: {
   }
 
   const where = {
-    archivedAt: null,
-    published: true,
+    ...(!opts?.includeUnpublished && { archivedAt: null, published: true }),
     ...(opts?.category && { category: { slug: opts.category } }),
   };
   const products = await db.product.findMany({
