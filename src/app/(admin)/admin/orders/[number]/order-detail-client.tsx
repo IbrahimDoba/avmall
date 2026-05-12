@@ -54,7 +54,7 @@ interface PageProps {
   params: { number: string };
 }
 
-export default function AdminOrderDetailPage({ params }: PageProps) {
+export function OrderDetailClient({ params }: PageProps) {
   // Totals (mock — Phase 4 will pull from DB)
   const itemsSubtotal = ORDER_DETAIL_ITEMS.reduce(
     (a, i) => a + i.unitKobo * i.qty,
