@@ -15,23 +15,39 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Money } from "@/components/ui/money";
 import { OrderStatusPill, PaymentStatusPill } from "@/components/ui/status-pill";
-import { CUSTOMERS, ORDERS_LIST } from "@/lib/admin-mock-data";
+import { getCustomer } from "@/lib/data/customers";
+import { listAdminOrders } from "@/lib/data/orders";
+import { formatMoney } from "@/lib/money";
 
 interface PageProps {
   params: { id: string };
 }
 
-export default function AdminCustomerDetailPage({ params }: PageProps) {
-  const customer = CUSTOMERS.find((c) => c.id === params.id);
+export default async function AdminCustomerDetailPage({ params }: PageProps) {
+  const customer = await getCustomer(params.id);
   if (!customer) notFound();
 
-  const orders = ORDERS_LIST.slice(0, 4);
+  const allOrders = await listAdminOrders();
+  const orders = allOrders
+    .filter(
+      (o) => o.customerName === customer.name || o.customerPhone === customer.phone,
+    )
+    .slice(0, 6);
+
   const initials = customer.name
     .split(" ")
     .map((n) => n[0])
     .join("")
     .slice(0, 2)
     .toUpperCase();
+
+  const lifetimeLabel = formatMoney(customer.lifetimeKobo);
+  const avgOrder = customer.ordersCount > 0
+    ? formatMoney(Math.floor(customer.lifetimeKobo / customer.ordersCount))
+    : "—";
+  const lastOrderLabel = customer.lastOrderAt
+    ? humanizeDate(customer.lastOrderAt)
+    : "Never";
 
   return (
     <>
@@ -96,13 +112,10 @@ export default function AdminCustomerDetailPage({ params }: PageProps) {
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 mt-4 pt-4 border-t border-border">
-                  <Stat label="Orders" value={String(customer.orders)} />
-                  <Stat
-                    label="Lifetime"
-                    value={`₦${(customer.lifetimeKobo / 100 / 1_000_000).toFixed(2)}M`}
-                  />
-                  <Stat label="Avg order" value="₦131k" />
-                  <Stat label="Last order" value={customer.lastOrder} />
+                  <Stat label="Orders" value={String(customer.ordersCount)} />
+                  <Stat label="Lifetime" value={lifetimeLabel} />
+                  <Stat label="Avg order" value={avgOrder} />
+                  <Stat label="Last order" value={lastOrderLabel} />
                 </div>
               </Card>
 
@@ -145,7 +158,7 @@ export default function AdminCustomerDetailPage({ params }: PageProps) {
               <Card
                 title="Orders"
                 action={
-                  <span className="text-[11px] text-fg-muted">{customer.orders} total</span>
+                  <span className="text-[11px] text-fg-muted">{customer.ordersCount} total</span>
                 }
                 padded={false}
               >
@@ -243,6 +256,15 @@ function Card({
       <div className={padded ? "p-4" : ""}>{children}</div>
     </div>
   );
+}
+
+function humanizeDate(d: Date): string {
+  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days}d ago`;
+  if (days < 30) return `${Math.floor(days / 7)}w ago`;
+  return d.toLocaleDateString("en-NG", { day: "numeric", month: "short", timeZone: "Africa/Lagos" });
 }
 
 function Stat({ label, value }: { label: string; value: string }) {

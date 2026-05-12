@@ -1,13 +1,13 @@
+import { notFound } from "next/navigation";
+import { getAdminOrder } from "@/lib/data/orders";
 import { OrderDetailClient } from "./order-detail-client";
 
 interface PageProps {
   params: { number: string };
 }
 
-// Server wrapper — Phase 4 wired the DB read at lib/data/orders.ts; the
-// client component is being rewired in the next commit to consume the
-// `order` prop directly. For now we forward `params` so the existing
-// behaviour is preserved.
-export default function AdminOrderDetailPage({ params }: PageProps) {
-  return <OrderDetailClient params={params} />;
+export default async function AdminOrderDetailPage({ params }: PageProps) {
+  const order = await getAdminOrder(params.number);
+  if (!order) notFound();
+  return <OrderDetailClient params={params} order={order} />;
 }

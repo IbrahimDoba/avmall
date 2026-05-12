@@ -44,42 +44,51 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { PaymentLedger } from "@/components/admin/payment-ledger";
 import { RecordPaymentModal } from "@/components/admin/record-payment-modal";
 import { toast } from "@/components/ui/toaster";
-import {
-  ORDER_DETAIL_ITEMS,
-  ORDER_PAYMENTS,
-  type OrderPayment,
-} from "@/lib/admin-mock-data";
+import type { OrderPayment } from "@/lib/admin-mock-data";
+import type { OrderDetail } from "@/lib/data/orders";
 import { formatMoney } from "@/lib/money";
 
 interface PageProps {
   params: { number: string };
+  order: OrderDetail;
 }
 
-export function OrderDetailClient({ params }: PageProps) {
-  // Totals (mock — Phase 4 will pull from DB)
-  const itemsSubtotal = ORDER_DETAIL_ITEMS.reduce(
-    (a, i) => a + i.unitKobo * i.qty,
-    0,
-  );
-  const totalLineDiscounts = ORDER_DETAIL_ITEMS.reduce(
-    (a, i) => a + i.discountKobo,
-    0,
-  );
-  const couponDiscount = 500000;
-  const shipping = 350000;
-  const total = itemsSubtotal - totalLineDiscounts - couponDiscount + shipping;
+export function OrderDetailClient({ params, order }: PageProps) {
+  // Items + monetary totals come from the server-fetched OrderDetail.
+  const orderItems = order.lines.map((l) => ({
+    id: l.id,
+    name: l.name,
+    variant: l.variant ?? "—",
+    sku: l.sku,
+    qty: l.quantity,
+    unitKobo: l.unitKobo,
+    discountKobo: l.bulkDiscountKobo,
+    tier: l.bulkTierLabel,
+    imageUrl: l.imageUrl,
+  }));
 
-  // Live payments — let the user record new ones in this session
-  const [payments, setPayments] = React.useState<OrderPayment[]>([...ORDER_PAYMENTS]);
-  const paid = payments
-    .filter((p) => p.status === "completed")
-    .reduce((a, p) => a + p.amountKobo, 0);
-  const outstanding = total - paid;
+  const itemsSubtotal = Number(order.totals.subtotalKobo);
+  const totalLineDiscounts = Number(order.totals.bulkDiscountKobo);
+  const couponDiscount = Number(order.totals.couponDiscountKobo);
+  const shipping = Number(order.totals.shippingKobo);
+  const total = Number(order.totals.totalKobo);
+
+  // Payments mirror the server data; locally appended ones are stub for the
+  // mock-mode fallback path.
+  const initialPayments: OrderPayment[] = order.payments.map((p) => ({
+    method: prettyMethod(p.method),
+    amountKobo: p.amountKobo,
+    txRef: p.reference ?? "—",
+    status: p.status === "completed" ? "completed" : p.status === "pending" ? "pending" : "completed",
+    by: p.by,
+    time: p.createdAt.toLocaleString("en-NG", { timeZone: "Africa/Lagos" }),
+  }));
+  const [payments, setPayments] = React.useState<OrderPayment[]>(initialPayments);
+  const paid = Number(order.totals.paidKobo);
+  const outstanding = Number(order.totals.outstandingKobo);
   const isPartiallyPaid = paid > 0 && outstanding > 0;
   const isOverpaid = outstanding < 0;
-
-  // Edge case toggles (real impl will come from DB)
-  const isBlacklisted = false;
+  const isBlacklisted = order.customer?.blacklisted ?? false;
 
   const [recordOpen, setRecordOpen] = React.useState(false);
   const [cancelOpen, setCancelOpen] = React.useState(false);
@@ -207,6 +216,23 @@ export function OrderDetailClient({ params }: PageProps) {
     }
   }
 
+  const placedAt = order.createdAt.toLocaleString("en-NG", {
+    timeZone: "Africa/Lagos",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const customerName = order.customer?.name ?? order.shipping.name;
+  const customerPhone = order.customer?.phone ?? order.shipping.phone;
+  const customerInitials = customerName
+    .split(" ")
+    .map((n) => n[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+
   const timeline: TimelineEvent[] = [
     { title: "Order placed", subtitle: "Tue 14 Jan · 2:14 PM", meta: "Funmi A.", done: true },
     ...payments
@@ -260,8 +286,8 @@ export function OrderDetailClient({ params }: PageProps) {
                 <h1 className="text-2xl font-bold font-mono tracking-tight tabular">
                   #{params.number}
                 </h1>
-                <OrderStatusPill status="processing" />
-                <PaymentStatusPill status="partial" />
+                <OrderStatusPill status={order.status} />
+                <PaymentStatusPill status={order.paymentStatus} />
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex items-center gap-1 text-xs px-2.5 py-0.5 rounded-full bg-surface-2 border border-border font-medium cursor-help">
@@ -272,7 +298,7 @@ export function OrderDetailClient({ params }: PageProps) {
                 </Tooltip>
               </div>
               <div className="text-sm text-fg-muted">
-                Placed Tue 14 Jan, 2:14 PM · by Funmi A. (you) · 3 items
+                Placed {placedAt} · {orderItems.length} item{orderItems.length === 1 ? "" : "s"}
               </div>
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -359,7 +385,7 @@ export function OrderDetailClient({ params }: PageProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {ORDER_DETAIL_ITEMS.map((it) => (
+                    {orderItems.map((it) => (
                       <tr key={it.id} className="border-t border-border">
                         <td className="px-3.5 py-3">
                           <div className="flex items-center gap-2.5">
@@ -625,25 +651,14 @@ export function OrderDetailClient({ params }: PageProps) {
               <Card title="Customer">
                 <div className="flex items-center gap-2.5 mb-3">
                   <Avatar size="lg">
-                    <AvatarFallback>TA</AvatarFallback>
+                    <AvatarFallback>{customerInitials}</AvatarFallback>
                   </Avatar>
                   <div className="flex-1 min-w-0">
-                    <div className="font-bold text-sm">Tolu Adeniyi</div>
+                    <div className="font-bold text-sm">{customerName}</div>
                     <div className="text-[11px] text-fg-muted font-mono tabular">
-                      +234 803 421 7790
+                      {customerPhone}
                     </div>
                   </div>
-                </div>
-                <div className="flex gap-1 mb-3 flex-wrap">
-                  <Badge tone="brand">VIP</Badge>
-                  <Badge>Wholesale</Badge>
-                  <Badge>Lagos</Badge>
-                </div>
-                <div className="grid grid-cols-2 gap-2 py-3 border-y border-border">
-                  <Stat label="Lifetime spend" value="₦1.84M" />
-                  <Stat label="Orders" value="14" />
-                  <Stat label="Avg order" value="₦131k" />
-                  <Stat label="Last order" value="6d ago" />
                 </div>
                 <div className="flex gap-1 mt-3">
                   <Button variant="ghost" size="icon" aria-label="Phone">
@@ -655,11 +670,13 @@ export function OrderDetailClient({ params }: PageProps) {
                   <Button variant="ghost" size="icon" aria-label="Email">
                     <Mail className="size-3.5" />
                   </Button>
-                  <Link href="/admin/customers/c1" className="flex-1">
-                    <Button variant="secondary" size="sm" width="full">
-                      Profile →
-                    </Button>
-                  </Link>
+                  {order.customer && (
+                    <Link href={`/admin/customers/${order.customer.id}`} className="flex-1">
+                      <Button variant="secondary" size="sm" width="full">
+                        Profile →
+                      </Button>
+                    </Link>
+                  )}
                 </div>
               </Card>
 
@@ -672,11 +689,16 @@ export function OrderDetailClient({ params }: PageProps) {
                 }
               >
                 <div className="text-sm leading-relaxed">
-                  <div className="font-semibold">Tolu Adeniyi</div>
-                  <div className="text-fg-muted">14 Bourdillon Road, Apt 3B</div>
-                  <div className="text-fg-muted">Ikoyi, Lagos</div>
+                  <div className="font-semibold">{order.shipping.name}</div>
+                  <div className="text-fg-muted">{order.shipping.line1}</div>
+                  {order.shipping.line2 && (
+                    <div className="text-fg-muted">{order.shipping.line2}</div>
+                  )}
+                  <div className="text-fg-muted">
+                    {order.shipping.city}, {order.shipping.state}
+                  </div>
                   <div className="text-fg-muted font-mono text-xs tabular mt-1">
-                    +234 803 421 7790
+                    {order.shipping.phone}
                   </div>
                 </div>
                 <div className="mt-3 p-2.5 rounded-md bg-surface-2 flex items-center gap-2">
@@ -769,6 +791,23 @@ function Card({
       <div className={padded ? "p-4" : ""}>{children}</div>
     </div>
   );
+}
+
+function prettyMethod(method: string): string {
+  switch (method) {
+    case "nuqood":
+      return "Nuqood card";
+    case "bank_transfer":
+      return "Bank transfer";
+    case "pos":
+      return "POS terminal";
+    case "cash":
+      return "Cash";
+    case "store_credit":
+      return "Store credit";
+    default:
+      return method;
+  }
 }
 
 function TotalRow({
