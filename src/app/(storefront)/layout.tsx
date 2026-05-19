@@ -46,14 +46,15 @@ export default function StorefrontLayout({ children }: { children: React.ReactNo
       <main className="flex-1">{children}</main>
       <StorefrontFooter />
       <Toaster />
-      {/* D-Zero AI chat widget — LOCAL DEV ONLY. Do not commit to main. */}
+      {/* D-Zero AI chat widget. The init queue lets calls fire before the embed
+          script finishes loading. Allowed origins live in the D-Zero dashboard. */}
       <script
         dangerouslySetInnerHTML={{
           __html:
-            "window.dz=window.dz||function(...a){(window.dz.q=window.dz.q||[]).push(a)};dz('init',{publicKey:'pk_live_9dfd77a666e1e67b8456e718'})",
+            "window.dz=window.dz||function(...a){(window.dz.q=window.dz.q||[]).push(a)};dz('init',{publicKey:'pk_live_f292c150e39cbce2ea8200a9'})",
         }}
       />
-      <script async src="http://localhost:3001/embed/v1.js" />
+      <script async src="https://www.dailzero.com/embed/v1.js" />
     </div>
   );
 }

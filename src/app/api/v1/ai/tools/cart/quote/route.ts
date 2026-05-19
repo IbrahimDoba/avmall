@@ -32,6 +32,7 @@ import { requireAiAgent } from "@/lib/ai-auth";
 import { computeQuote, type QuoteInputLine } from "@/lib/cart-quote";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { AppError, NotFoundError, ValidationError } from "@/lib/errors";
+import { formatMoney } from "@/lib/money";
 
 export const runtime = "nodejs";
 
@@ -162,11 +163,13 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(
       apiSuccess({
+        currency: "NGN",
         subtotalKobo: quote.subtotalKobo,
         bulkDiscountKobo: quote.bulkDiscountKobo,
         couponDiscountKobo: quote.couponDiscountKobo,
         shippingKobo: quote.shippingKobo,
         totalKobo: quote.totalKobo,
+        displayTotal: formatMoney(quote.totalKobo),
         freeShipping: freeShippingEligible,
         itemCount: quote.itemCount,
         ...(coupon && {

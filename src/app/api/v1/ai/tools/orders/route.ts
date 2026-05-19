@@ -65,6 +65,7 @@ const bodySchema = z.object({
     state: z.string().min(1, "State is required"),
   }),
   couponCode: z.string().optional(),
+  idempotencyKey: z.string().optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -79,7 +80,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const idempotencyKey = req.headers.get("idempotency-key") ?? undefined;
     const rawBody = await req.json();
     const parsed = bodySchema.safeParse(rawBody);
     if (!parsed.success) {
@@ -89,6 +89,7 @@ export async function POST(req: NextRequest) {
       });
     }
     const body = parsed.data;
+    const idempotencyKey = req.headers.get("idempotency-key") ?? body.idempotencyKey;
 
     const normalizedPhone = normaliseNigerianPhone(body.contact.phone);
 

@@ -9,6 +9,7 @@ import { CATEGORIES } from "@/lib/mock-data";
 import { SITE } from "@/lib/site";
 import { cn } from "@/lib/utils";
 import { NavSearch } from "@/components/storefront/nav-search";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const NAV_LINKS = [
   { href: "/category/phones", label: "Phones & Tablets" },
@@ -93,6 +94,9 @@ export function TopNav() {
           >
             <Search className="size-5" />
           </button>
+
+          {/* Theme */}
+          <ThemeToggle className="size-10 rounded-full" />
 
           {/* Account */}
           <Link

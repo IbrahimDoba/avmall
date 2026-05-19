@@ -2,6 +2,7 @@
 
 import { Bell, Menu } from "lucide-react";
 import { AdminTopBarSearch } from "@/components/admin/topbar-search";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 interface TopBarProps {
   breadcrumbs?: { label: string; href?: string }[];
@@ -37,6 +38,8 @@ export function AdminTopBar({ breadcrumbs = [], onOpenMobileNav }: TopBarProps) 
       <div className="flex-1" />
 
       <AdminTopBarSearch />
+
+      <ThemeToggle />
 
       <button
         className="relative flex items-center justify-center size-9 rounded-md hover:bg-surface-2"

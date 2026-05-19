@@ -100,15 +100,18 @@ export default async function HomePage() {
             </div>
           </div>
 
-          <div className="relative bg-gradient-to-br from-[#1f6f4a] via-[#155236] to-[#0a3322] flex items-end p-8 lg:p-10 text-white min-h-[280px] lg:min-h-0">
+          <div className="relative bg-[#0a3322] flex items-end p-8 lg:p-10 text-white min-h-[280px] lg:min-h-0">
             <Image
               src="https://dodptt9f4zk9h.cloudfront.net/stores/114586/products/27756b025a9c2d6488d67a8ac2991262b7099557.jpeg"
               alt="Featured Oraimo power bank"
               fill
               sizes="(min-width: 1024px) 50vw, 100vw"
-              className="object-cover opacity-40 mix-blend-multiply"
+              className="object-cover"
               priority
             />
+            {/* Bottom-anchored darkening gradient so the text below stays readable
+                without dimming the product itself. */}
+            <div className="absolute inset-0 bg-gradient-to-t from-[#0a3322]/95 via-[#0a3322]/55 to-transparent" />
             <div className="absolute top-6 right-6 px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm text-[11px] font-bold uppercase tracking-widest">
               Featured
             </div>
@@ -123,7 +126,7 @@ export default async function HomePage() {
                 Multi-day backup for phones, lamps, and small fans. In stock today.
               </div>
               <Link href="/product/oraimo-50000mah-powerbank">
-                <Button className="bg-white text-fg hover:bg-white/90">
+                <Button className="bg-white text-zinc-900 hover:bg-white/90">
                   Shop the drop <ChevronRight className="size-4" />
                 </Button>
               </Link>
