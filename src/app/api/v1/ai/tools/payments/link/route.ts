@@ -98,6 +98,10 @@ export async function POST(req: NextRequest) {
     let nuqoodLive = false;
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h
 
+    // Use the active deployment URL for functional links so customers don't
+    // land on the old apex domain that may not have these routes yet.
+    const appBaseUrl = env.NEXT_PUBLIC_APP_URL ?? SITE.url;
+
     if (nuqoodConfigured && method === "nuqood") {
       // Look up the customer email if available — Nuqood requires one.
       const customer = order.customerId
@@ -109,7 +113,7 @@ export async function POST(req: NextRequest) {
       const email =
         customer?.email ?? `order-${order.number}@${SITE.url.replace(/^https?:\/\//, "")}`;
 
-      const callbackUrl = `${SITE.url}/api/v1/webhooks/nuqood${
+      const callbackUrl = `${appBaseUrl}/api/v1/webhooks/nuqood${
         env.NUQOOD_WEBHOOK_SECRET
           ? `?token=${encodeURIComponent(env.NUQOOD_WEBHOOK_SECRET)}`
           : ""
@@ -133,7 +137,7 @@ export async function POST(req: NextRequest) {
       // Stub flow: random reference + storefront URL so the customer has
       // somewhere to land. The webhook is the source of truth in production.
       reference = makeRef();
-      paymentUrl = `${SITE.url}/orders/${order.number}?ref=${reference}`;
+      paymentUrl = `${appBaseUrl}/orders/${order.number}?ref=${reference}`;
     }
 
     await db.orderPayment.create({

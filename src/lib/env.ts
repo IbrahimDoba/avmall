@@ -70,6 +70,12 @@ const envSchema = z.object({
   UPSTASH_REDIS_REST_URL: z.string().url().optional(),
   UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
 
+  /// Overrides the base URL used for functional links (payment URLs, Nuqood
+  /// webhook callbacks). Defaults to SITE.url for SEO/OG. Set this to the
+  /// active deployment (e.g. https://avmall.vercel.app) when the apex domain
+  /// hasn't been moved over yet.
+  NEXT_PUBLIC_APP_URL: z.string().url().optional(),
+
   // Observability
   SENTRY_DSN: z.string().optional(),
   NEXT_PUBLIC_POSTHOG_KEY: z.string().optional(),
@@ -111,6 +117,7 @@ export const env = envSchema.parse({
   AFRICAS_TALKING_USERNAME: blank(process.env.AFRICAS_TALKING_USERNAME),
   UPSTASH_REDIS_REST_URL: blank(process.env.UPSTASH_REDIS_REST_URL),
   UPSTASH_REDIS_REST_TOKEN: blank(process.env.UPSTASH_REDIS_REST_TOKEN),
+  NEXT_PUBLIC_APP_URL: blank(process.env.NEXT_PUBLIC_APP_URL),
   SENTRY_DSN: blank(process.env.SENTRY_DSN),
   NEXT_PUBLIC_POSTHOG_KEY: blank(process.env.NEXT_PUBLIC_POSTHOG_KEY),
   AXIOM_TOKEN: blank(process.env.AXIOM_TOKEN),
