@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
@@ -17,8 +18,10 @@ import {
   Truck,
   Shield,
   LogOut,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAdminNav } from "@/stores/admin-nav-store";
 
 interface NavItem {
   href: string;
@@ -47,11 +50,56 @@ const SECONDARY: NavItem[] = [
 
 export function AdminSidebar() {
   const pathname = usePathname();
+  const mobileOpen = useAdminNav((s) => s.mobileOpen);
+  const close = useAdminNav((s) => s.close);
+
+  // Close the mobile drawer whenever the route changes (e.g. tapping a link).
+  React.useEffect(() => {
+    close();
+  }, [pathname, close]);
+
+  return (
+    <>
+      {/* Desktop: persistent rail */}
+      <aside className="hidden lg:flex flex-shrink-0 w-60 flex-col bg-surface border-r border-border">
+        <SidebarBody />
+      </aside>
+
+      {/* Mobile: slide-in drawer */}
+      <div
+        className={cn(
+          "lg:hidden fixed inset-0 z-40 bg-fg/40 transition-opacity",
+          mobileOpen ? "opacity-100" : "opacity-0 pointer-events-none",
+        )}
+        onClick={close}
+        aria-hidden
+      />
+      <aside
+        className={cn(
+          "lg:hidden fixed inset-y-0 left-0 z-50 w-64 max-w-[85vw] flex flex-col bg-surface border-r border-border shadow-lg transition-transform",
+          mobileOpen ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
+        <button
+          onClick={close}
+          className="absolute top-4 right-3 inline-flex items-center justify-center size-8 rounded-md hover:bg-surface-2 text-fg-muted"
+          aria-label="Close navigation"
+        >
+          <X className="size-5" />
+        </button>
+        <SidebarBody />
+      </aside>
+    </>
+  );
+}
+
+function SidebarBody() {
+  const pathname = usePathname();
   const isActive = (item: NavItem) =>
     item.exact ? pathname === item.href : pathname.startsWith(item.href);
 
   return (
-    <aside className="hidden lg:flex flex-shrink-0 w-60 flex-col bg-surface border-r border-border">
+    <>
       {/* Logo */}
       <div className="px-4 pt-5 pb-4 flex items-center gap-2.5">
         <Image
@@ -82,7 +130,7 @@ export function AdminSidebar() {
 
       {/* User pill */}
       <UserPill />
-    </aside>
+    </>
   );
 }
 

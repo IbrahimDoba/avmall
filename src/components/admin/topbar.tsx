@@ -3,17 +3,18 @@
 import { Bell, Menu } from "lucide-react";
 import { AdminTopBarSearch } from "@/components/admin/topbar-search";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { useAdminNav } from "@/stores/admin-nav-store";
 
 interface TopBarProps {
   breadcrumbs?: { label: string; href?: string }[];
-  onOpenMobileNav?: () => void;
 }
 
-export function AdminTopBar({ breadcrumbs = [], onOpenMobileNav }: TopBarProps) {
+export function AdminTopBar({ breadcrumbs = [] }: TopBarProps) {
+  const openMobileNav = useAdminNav((s) => s.open);
   return (
     <header className="flex-shrink-0 h-14 bg-surface border-b border-border flex items-center gap-3 px-4 lg:px-6">
       <button
-        onClick={onOpenMobileNav}
+        onClick={openMobileNav}
         className="lg:hidden inline-flex items-center justify-center size-9 rounded-md hover:bg-surface-2"
         aria-label="Open navigation"
       >
