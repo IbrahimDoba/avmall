@@ -1,10 +1,12 @@
-import { Plus, Lock, MoreHorizontal, Flag, Sparkles, Tag } from "lucide-react";
+import Link from "next/link";
+import { Plus, Lock, Flag, Sparkles, Tag } from "lucide-react";
 import { AdminTopBar } from "@/components/admin/topbar";
 import { PageHeader } from "@/components/admin/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { listDiscounts } from "@/lib/data/discounts";
 import { type DiscountKind } from "@/lib/admin-mock-data";
+import { DiscountRowActions } from "./row-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -31,9 +33,11 @@ export default async function AdminDiscountsPage() {
             title="Discounts"
             subtitle={`${DISCOUNTS.length} discounts · ${DISCOUNTS.filter((d) => d.active).length} active`}
             actions={
-              <Button size="sm">
-                <Plus className="size-3.5" /> New discount
-              </Button>
+              <Link href="/admin/discounts/new">
+                <Button size="sm">
+                  <Plus className="size-3.5" /> New discount
+                </Button>
+              </Link>
             }
           />
 
@@ -123,12 +127,12 @@ export default async function AdminDiscountsPage() {
                           </Badge>
                         </td>
                         <td className="px-3.5 py-3 text-right">
-                          <button
-                            className="p-1.5 text-fg-muted hover:text-fg rounded-md hover:bg-surface"
-                            aria-label="Row actions"
-                          >
-                            <MoreHorizontal className="size-4" />
-                          </button>
+                          <DiscountRowActions
+                            id={d.id}
+                            active={d.active}
+                            usage={d.usage}
+                            name={d.name}
+                          />
                         </td>
                       </tr>
                     );

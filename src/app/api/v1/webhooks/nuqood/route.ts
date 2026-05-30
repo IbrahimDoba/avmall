@@ -99,8 +99,29 @@ export async function POST(req: NextRequest) {
       });
 
       if (!payment) {
-        // Unknown reference — log and accept (200) so Nuqood stops retrying.
-        // We can't link the money to an order without manual reconciliation.
+        // Unknown reference — accept (200) so Nuqood stops retrying, but
+        // record an audit entry so staff can reconcile manually. Without
+        // this trail the money would land silently.
+        await writeAudit(
+          {
+            actorType: "system",
+            action: "payment.webhook_unknown_reference",
+            entityType: "order_payment",
+            entityId: reference,
+            metadata: {
+              channel: "nuqood-webhook",
+              reference,
+              amountKobo,
+              ...(payload.customer_sendername && {
+                senderName: payload.customer_sendername,
+              }),
+              ...(payload.customer_senderaccountnumber && {
+                senderAccount: payload.customer_senderaccountnumber,
+              }),
+            },
+          },
+          tx,
+        );
         return { kind: "unknown" as const };
       }
 
