@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { Check, MapPin, Truck, MessageCircle, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,7 @@ import { Timeline, type TimelineEvent } from "@/components/ui/timeline";
 import { getCustomerOrder } from "@/lib/data/orders";
 import { getCustomerSession } from "@/lib/customer-session";
 import { formatNigerianPhone } from "@/lib/phone";
+import { hasTrackGrant, GRANT_COOKIE } from "@/lib/track-grant";
 
 interface PageProps {
   params: { number: string };
@@ -15,8 +17,16 @@ interface PageProps {
 
 export default async function OrderConfirmationPage({ params }: PageProps) {
   const session = await getCustomerSession();
-  // Customers can only see their own orders. When DB is missing the helper
-  // returns the same mock order regardless, which is fine for design mode.
+  // Logged-in customer? Show only their own orders. Guests need a signed
+  // grant cookie minted by /api/v1/track-order — they can't view by URL
+  // enumeration alone (CLAUDE.md §19).
+  if (!session) {
+    const grant = cookies().get(GRANT_COOKIE)?.value;
+    if (!hasTrackGrant(grant, params.number)) {
+      notFound();
+    }
+  }
+
   const order = await getCustomerOrder(params.number, session?.customerId ?? null);
   if (!order) notFound();
 

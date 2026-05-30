@@ -48,6 +48,7 @@ import { emailOnOrderCreated } from "@/lib/order-emails";
 import { env } from "@/lib/env";
 import { SITE } from "@/lib/site";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
+import { setGrantCookie, GRANT_COOKIE } from "@/lib/track-grant";
 import {
   AppError,
   BlacklistedError,
@@ -418,10 +419,19 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    return NextResponse.json(apiSuccess(result.response), {
+    const res = NextResponse.json(apiSuccess(result.response), {
       status: result.statusCode,
       ...(result.replay && { headers: { "Idempotency-Replay": "true" } }),
     });
+    // Guest checkouts also need to see their confirmation page. Mint a
+    // 24h grant cookie scoped to the newly-created order number so the
+    // /orders/[number] page renders without requiring login.
+    setGrantCookie(
+      res.cookies,
+      result.response.order.number,
+      req.cookies.get(GRANT_COOKIE)?.value,
+    );
+    return res;
   } catch (err) {
     return handleApiError(err);
   }
