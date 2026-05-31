@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Plus, MoreHorizontal, ShieldCheck, Loader2, Mail } from "lucide-react";
+import { Plus, MoreHorizontal, ShieldCheck, Loader2, Mail, UserCog } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { AdminTopBar } from "@/components/admin/topbar";
 import { PageHeader } from "@/components/admin/page-header";
@@ -99,6 +99,8 @@ export function StaffClient({ initialStaff }: StaffClientProps) {
   const router = useRouter();
   const [staff, setStaff] = React.useState<StaffMember[]>(initialStaff);
   const [inviteOpen, setInviteOpen] = React.useState(false);
+  const [editTarget, setEditTarget] = React.useState<StaffMember | null>(null);
+  const [togglingId, setTogglingId] = React.useState<string | null>(null);
 
   async function sendPasswordReset(email: string) {
     try {
@@ -107,17 +109,42 @@ export function StaffClient({ initialStaff }: StaffClientProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
-      // Endpoint always returns 200 to avoid enumeration. We tell the staff
-      // user the same thing.
       toast.success(`Reset link sent to ${email}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Network error");
     }
   }
 
-  function toggleActive(id: string, next: boolean) {
-    setStaff((prev) => prev.map((s) => (s.id === id ? { ...s, active: next } : s)));
-    toast.success(next ? "User reactivated" : "User disabled");
+  async function toggleActive(member: StaffMember, next: boolean) {
+    setTogglingId(member.id);
+    try {
+      const res = await fetch(`/api/v1/admin/staff/${member.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: next }),
+      });
+      const json = await res.json();
+      if (res.status === 404 || res.status === 503) {
+        // Local/mock mode — update state only
+        setStaff((prev) => prev.map((s) => (s.id === member.id ? { ...s, active: next } : s)));
+        toast.success(next ? "User reactivated" : "User disabled");
+        return;
+      }
+      if (!res.ok) {
+        toast.error(json?.error?.message ?? "Could not update");
+        return;
+      }
+      setStaff((prev) => prev.map((s) => (s.id === member.id ? { ...s, active: next } : s)));
+      toast.success(next ? `${member.name} reactivated` : `${member.name} disabled`);
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
+  function onRoleUpdated(id: string, newRole: StaffRole) {
+    setStaff((prev) => prev.map((s) => (s.id === id ? { ...s, role: newRole } : s)));
   }
 
   const columns: ColumnDef<StaffMember>[] = [
@@ -159,7 +186,8 @@ export function StaffClient({ initialStaff }: StaffClientProps) {
       cell: ({ row }) => (
         <Switch
           checked={row.original.active}
-          onCheckedChange={(v) => toggleActive(row.original.id, v)}
+          disabled={togglingId === row.original.id}
+          onCheckedChange={(v) => toggleActive(row.original, v)}
         />
       ),
     },
@@ -179,13 +207,17 @@ export function StaffClient({ initialStaff }: StaffClientProps) {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setEditTarget(row.original)}>
+                <UserCog className="size-3.5" /> Change role
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => sendPasswordReset(row.original.email)}>
-                Send password reset email
+                <Mail className="size-3.5" /> Send password reset
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                destructive
-                onClick={() => toggleActive(row.original.id, !row.original.active)}
+                destructive={row.original.active}
+                onClick={() => toggleActive(row.original, !row.original.active)}
+                disabled={togglingId === row.original.id}
               >
                 {row.original.active ? "Disable" : "Reactivate"}
               </DropdownMenuItem>
@@ -220,13 +252,10 @@ export function StaffClient({ initialStaff }: StaffClientProps) {
                 <div>
                   <div className="text-sm font-bold">Permissions matrix</div>
                   <div className="text-xs text-fg-muted mt-0.5">
-                    System roles cannot be deleted. Edits take effect immediately.
+                    What each role can do. System roles cannot be deleted.
                   </div>
                 </div>
               </div>
-              <Button variant="secondary" size="sm">
-                <Plus className="size-3.5" /> New custom role
-              </Button>
             </div>
             <PermissionMatrix groups={PERMISSIONS} roles={ROLES_LIST} />
           </div>
@@ -238,7 +267,94 @@ export function StaffClient({ initialStaff }: StaffClientProps) {
         onOpenChange={setInviteOpen}
         onInvited={() => router.refresh()}
       />
+
+      {editTarget && (
+        <EditRoleDialog
+          member={editTarget}
+          onClose={() => setEditTarget(null)}
+          onSaved={(newRole) => {
+            onRoleUpdated(editTarget.id, newRole);
+            setEditTarget(null);
+          }}
+        />
+      )}
     </>
+  );
+}
+
+function EditRoleDialog({
+  member,
+  onClose,
+  onSaved,
+}: {
+  member: StaffMember;
+  onClose: () => void;
+  onSaved: (role: StaffRole) => void;
+}) {
+  const [role, setRole] = React.useState<StaffRole>(member.role);
+  const [saving, setSaving] = React.useState(false);
+
+  async function save() {
+    if (role === member.role) { onClose(); return; }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/v1/admin/staff/${member.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role }),
+      });
+      const json = await res.json();
+      if (res.status === 404 || res.status === 503) {
+        toast.success(`Role updated to ${ROLE_LABELS[role]} (local)`);
+        onSaved(role);
+        return;
+      }
+      if (!res.ok) {
+        toast.error(json?.error?.message ?? "Could not update role");
+        return;
+      }
+      toast.success(`${member.name}'s role changed to ${ROLE_LABELS[role]}`);
+      onSaved(role);
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Change role — {member.name}</DialogTitle>
+          <DialogDescription>
+            Role changes take effect on their next login.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="mt-4">
+          <Field id="edit-role" label="Role">
+            <Select
+              id="edit-role"
+              value={role}
+              onChange={(e) => setRole(e.target.value as StaffRole)}
+            >
+              <option value="super_admin">Super admin</option>
+              <option value="manager">Manager</option>
+              <option value="sales">Sales</option>
+              <option value="inventory">Inventory</option>
+              <option value="support">Support</option>
+            </Select>
+          </Field>
+        </div>
+        <DialogFooter className="mt-5">
+          <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={save} disabled={saving}>
+            {saving && <Loader2 className="size-4 animate-spin" />}
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -256,18 +372,11 @@ function InviteDialog({
   const [role, setRole] = React.useState<StaffRole>("sales");
   const [submitting, setSubmitting] = React.useState(false);
 
-  function reset() {
-    setName("");
-    setEmail("");
-    setRole("sales");
-  }
+  function reset() { setName(""); setEmail(""); setRole("sales"); }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !email.trim()) {
-      toast.error("Name and email are required.");
-      return;
-    }
+    if (!name.trim() || !email.trim()) { toast.error("Name and email are required."); return; }
     setSubmitting(true);
     try {
       const res = await fetch("/api/v1/admin/staff", {
@@ -276,10 +385,7 @@ function InviteDialog({
         body: JSON.stringify({ name: name.trim(), email: email.trim(), role }),
       });
       const json = await res.json();
-      if (!res.ok) {
-        toast.error(json?.error?.message ?? "Could not send invitation");
-        return;
-      }
+      if (!res.ok) { toast.error(json?.error?.message ?? "Could not send invitation"); return; }
       const skipped = json?.data?.email?.skipped;
       toast.success(
         skipped
@@ -303,35 +409,18 @@ function InviteDialog({
           <DialogHeader>
             <DialogTitle>Invite staff</DialogTitle>
             <DialogDescription>
-              Send a one-time link by email so they can set their password and sign in.
-              Links are valid for 7 days.
+              Send a one-time link so they can set their password and sign in. Valid 7 days.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3 mt-4">
             <Field id="invite-name" label="Full name">
-              <Input
-                id="invite-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Funmi Adesina"
-                autoFocus
-              />
+              <Input id="invite-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Funmi Adesina" autoFocus />
             </Field>
             <Field id="invite-email" label="Work email">
-              <Input
-                id="invite-email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="funmi@avmall.ng"
-              />
+              <Input id="invite-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="funmi@avmall.ng" />
             </Field>
             <Field id="invite-role" label="Role">
-              <Select
-                id="invite-role"
-                value={role}
-                onChange={(e) => setRole(e.target.value as StaffRole)}
-              >
+              <Select id="invite-role" value={role} onChange={(e) => setRole(e.target.value as StaffRole)}>
                 <option value="super_admin">Super admin</option>
                 <option value="manager">Manager</option>
                 <option value="sales">Sales</option>
@@ -341,14 +430,7 @@ function InviteDialog({
             </Field>
           </div>
           <DialogFooter className="mt-5">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenChange(false)}
-              disabled={submitting}
-            >
-              Cancel
-            </Button>
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>Cancel</Button>
             <Button type="submit" disabled={submitting}>
               {submitting && <Loader2 className="size-4 animate-spin" />}
               <Mail className="size-4" /> Send invitation

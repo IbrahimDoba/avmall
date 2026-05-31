@@ -781,6 +781,28 @@ model PasswordReset {
   @@map("password_resets")
 }
 
+// ─── Business / site settings ─────────────────────────────────────────────
+// Single row (key = "default"). Editable from /admin/settings.
+// Env vars serve as the hard fallback when the row doesn't exist yet.
+
+model SiteSettings {
+  key              String   @id @default("default")
+  storeName        String   @default("Avmall") @map("store_name")
+  storeEmail       String   @default("hello@avmall.com.ng") @map("store_email")
+  storePhone       String   @default("+234 803 421 7790") @map("store_phone")
+  storeWhatsapp    String   @default("+2348034217790") @map("store_whatsapp")
+  storeAddress     String   @default("14 Bourdillon Road, Ikoyi, Lagos") @map("store_address")
+  /// Fallback bank account shown when Nuqood is not configured
+  bankNumber       String?  @map("bank_number")
+  bankAccountName  String?  @map("bank_account_name")
+  bankName         String?  @map("bank_name")
+  /// Return policy window in days (default 14)
+  returnWindowDays Int      @default(14) @map("return_window_days")
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("site_settings")
+}
+
 // ─── Pending checkout sessions (bank-transfer, pre-order-creation) ───────
 //
 // Created when the customer clicks "Pay" for a Nuqood bank transfer.

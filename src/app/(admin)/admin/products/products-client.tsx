@@ -238,7 +238,25 @@ export function ProductsListClient({ products }: Props) {
               >
                 <Eye className="size-3.5" /> Edit
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => toast.success("Duplicated")}>
+              <DropdownMenuItem
+                onClick={async () => {
+                  const res = await fetch(
+                    `/api/v1/admin/products/${row.original.slug}/duplicate`,
+                    { method: "POST" },
+                  );
+                  if (res.status === 503) {
+                    toast.error("Database required to duplicate products");
+                    return;
+                  }
+                  const json = await res.json();
+                  if (!res.ok) {
+                    toast.error(json?.error?.message ?? "Could not duplicate");
+                    return;
+                  }
+                  toast.success(`Duplicated as "${json.data.name}"`);
+                  router.push(`/admin/products/${json.data.slug}`);
+                }}
+              >
                 <Copy className="size-3.5" /> Duplicate
               </DropdownMenuItem>
               <DropdownMenuSeparator />

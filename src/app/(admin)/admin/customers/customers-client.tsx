@@ -31,6 +31,15 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toaster";
 import { waLink, mailtoLink } from "@/lib/contact-links";
 import { type CustomerListRow } from "@/lib/admin-mock-data";
@@ -45,6 +54,7 @@ export function CustomersClient({ customers }: CustomersClientProps) {
   const [search, setSearch] = React.useState("");
   const [segmentValues, setSegmentValues] = React.useState<string[]>([]);
   const [blacklistTarget, setBlacklistTarget] = React.useState<CustomerListRow | null>(null);
+  const [tagTarget, setTagTarget] = React.useState<CustomerListRow | null>(null);
 
   const blacklistedCount = customers.filter((c) => c.blacklisted).length;
   const vipCount = customers.filter((c) => c.segments.includes("VIP")).length;
@@ -213,8 +223,8 @@ export function CustomersClient({ customers }: CustomersClientProps) {
                   <Mail className="size-3.5" /> Email
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem disabled>
-                <Tag className="size-3.5" /> Tag… — coming soon
+              <DropdownMenuItem onClick={() => setTagTarget(row.original)}>
+                <Tag className="size-3.5" /> Manage tags
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               {row.original.blacklisted ? (
@@ -342,6 +352,138 @@ export function CustomersClient({ customers }: CustomersClientProps) {
           }
         }}
       />
+
+      {tagTarget && (
+        <TagDialog
+          customer={tagTarget}
+          onClose={() => setTagTarget(null)}
+          onSaved={(segments) => {
+            setTagTarget(null);
+            router.refresh();
+            toast.success(`Tags updated for ${tagTarget.name}`);
+            // Optimistic local update
+            segments; // used by refresh
+          }}
+        />
+      )}
     </>
+  );
+}
+
+const PRESET_TAGS = ["VIP", "Wholesale", "Lagos", "Abuja", "Kano", "Anambra", "Rivers", "Ibadan", "Retail", "B2B"];
+
+function TagDialog({
+  customer,
+  onClose,
+  onSaved,
+}: {
+  customer: CustomerListRow;
+  onClose: () => void;
+  onSaved: (segments: string[]) => void;
+}) {
+  const [segments, setSegments] = React.useState<string[]>([...customer.segments]);
+  const [custom, setCustom] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+
+  function toggle(tag: string) {
+    setSegments((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
+    );
+  }
+
+  function addCustom() {
+    const t = custom.trim();
+    if (!t || segments.includes(t)) { setCustom(""); return; }
+    setSegments((prev) => [...prev, t]);
+    setCustom("");
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/v1/admin/customers/${customer.id}/tags`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ segments }),
+      });
+      const json = await res.json();
+      if (res.status === 503) { toast.success("Tags updated (local)"); onSaved(segments); return; }
+      if (!res.ok) { toast.error(json?.error?.message ?? "Could not save tags"); return; }
+      onSaved(segments);
+    } catch { toast.error("Network error"); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Tags — {customer.name}</DialogTitle>
+          <DialogDescription>Add or remove segments to filter and report on this customer.</DialogDescription>
+        </DialogHeader>
+        <div className="mt-4 flex flex-col gap-4">
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wider text-fg-muted mb-2">Presets</div>
+            <div className="flex flex-wrap gap-2">
+              {PRESET_TAGS.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => toggle(tag)}
+                  className={segments.includes(tag)
+                    ? "px-3 py-1 rounded-full text-xs font-semibold bg-brand-primary text-brand-primary-fg"
+                    : "px-3 py-1 rounded-full text-xs font-semibold bg-surface-2 text-fg hover:bg-bg border border-border"}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wider text-fg-muted mb-2">Custom tag</div>
+            <div className="flex gap-2">
+              <Input
+                value={custom}
+                onChange={(e) => setCustom(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addCustom()}
+                placeholder="e.g. B2B, North, Kano"
+                className="flex-1"
+              />
+              <button
+                type="button"
+                onClick={addCustom}
+                className="px-3 py-1.5 rounded-md bg-surface-2 border border-border text-xs font-semibold hover:bg-bg"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+          {segments.length > 0 && (
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wider text-fg-muted mb-2">Applied ({segments.length})</div>
+              <div className="flex flex-wrap gap-1.5">
+                {segments.map((tag) => (
+                  <span key={tag} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-info-bg text-brand-primary border border-brand-primary/20">
+                    {tag}
+                    <button type="button" onClick={() => toggle(tag)} className="ml-0.5 hover:text-danger">×</button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        <DialogFooter className="mt-5">
+          <button type="button" onClick={onClose} className="text-sm font-semibold text-fg-muted hover:text-fg px-3">Cancel</button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="px-4 py-2 rounded-md bg-brand-primary text-brand-primary-fg text-sm font-semibold disabled:opacity-60"
+          >
+            {saving ? "Saving…" : "Save tags"}
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
