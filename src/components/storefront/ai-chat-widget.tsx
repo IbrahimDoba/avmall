@@ -1,14 +1,38 @@
 "use client";
 
 import * as React from "react";
-import { MessageCircle, X, Send, Sparkles } from "lucide-react";
+import { MessageCircle, X, Send, Sparkles, ShoppingBag, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useCart } from "@/stores/cart-store";
 import { cn } from "@/lib/utils";
 
 type Message = { from: "ai" | "user" | "staff"; text: string };
 
-const SEED_MESSAGES: Message[] = [
+// Each AI "offer" message optionally carries a cart payload so the widget
+// can actually add the product if the user confirms.
+interface CartPayload {
+  productId: string;
+  variantId: string;
+  qty: number;
+  snapshot: {
+    slug: string;
+    name: string;
+    brand: string;
+    imageUrl: string;
+    bg: string;
+    variantLabel: string;
+    unitKobo: number;
+    stock: number;
+    bulk: { min: number; max: number | null; type: "percentage" | "fixed"; value: number }[];
+  };
+}
+
+interface EnrichedMessage extends Message {
+  cartPayload?: CartPayload;
+}
+
+const SEED_MESSAGES: EnrichedMessage[] = [
   {
     from: "ai",
     text: "Hi! I'm Ada, Avmall's shopping assistant. Ask me about products, prices, or delivery.",
@@ -17,26 +41,78 @@ const SEED_MESSAGES: Message[] = [
   {
     from: "ai",
     text: "Yes — Aramide Rose & Clay Mask 100ml is in stock at ₦24,000. We have 12 units left. Want me to add it to your cart?",
+    cartPayload: {
+      productId: "p4308826",
+      variantId: "p4308826-default",
+      qty: 1,
+      snapshot: {
+        slug: "aramide-rose-clay-mask-100ml",
+        name: "Aramide Rose & Clay Mask 100ml",
+        brand: "Aramide",
+        imageUrl: "https://images.unsplash.com/photo-1556228578-8c89e6adf883?w=400&q=80",
+        bg: "linear-gradient(135deg, #f5e6e8 0%, #d4a0a8 100%)",
+        variantLabel: "100ml",
+        unitKobo: 2400000,
+        stock: 12,
+        bulk: [],
+      },
+    },
   },
 ];
 
-const SUGGESTIONS = ["Add it to my cart", "What about 200ml?", "Talk to a human"];
+const BASE_SUGGESTIONS = ["What about 200ml?", "Talk to a human", "Track my order"];
 
 export function AiChatWidget() {
   const [open, setOpen] = React.useState(false);
-  const [messages, setMessages] = React.useState<Message[]>(SEED_MESSAGES);
+  const [messages, setMessages] = React.useState<EnrichedMessage[]>(SEED_MESSAGES);
   const [draft, setDraft] = React.useState("");
+  const [addedIds, setAddedIds] = React.useState<Set<string>>(new Set());
   const scrollRef = React.useRef<HTMLDivElement>(null);
+  const addLines = useCart((s) => s.addLines);
 
   React.useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, open]);
 
+  // The last AI message with a cart payload is the pending offer.
+  const pendingOffer = [...messages]
+    .reverse()
+    .find((m) => m.from === "ai" && m.cartPayload);
+
+  const suggestions =
+    pendingOffer && pendingOffer.cartPayload && !addedIds.has(pendingOffer.cartPayload.productId)
+      ? ["Add it to my cart", ...BASE_SUGGESTIONS]
+      : BASE_SUGGESTIONS;
+
+  function addToCart(payload: CartPayload) {
+    addLines([
+      {
+        productId: payload.productId,
+        variantId: payload.variantId,
+        qty: payload.qty,
+        snapshot: payload.snapshot,
+      },
+    ]);
+    setAddedIds((prev) => new Set(prev).add(payload.productId));
+    setMessages((m) => [
+      ...m,
+      { from: "ai", text: `Done! ${payload.snapshot.name} (×${payload.qty}) has been added to your cart.` },
+    ]);
+  }
+
   function send(text: string = draft) {
     const t = text.trim();
     if (!t) return;
-    setMessages((m) => [...m, { from: "user", text: t }]);
     setDraft("");
+
+    // Handle "add to cart" intent against the pending offer.
+    if (/add.*(to.*(my.*)?(cart|bag))|yes|sure|ok/i.test(t) && pendingOffer?.cartPayload) {
+      setMessages((m) => [...m, { from: "user", text: t }]);
+      addToCart(pendingOffer.cartPayload);
+      return;
+    }
+
+    setMessages((m) => [...m, { from: "user", text: t }]);
     window.setTimeout(() => {
       setMessages((m) => [
         ...m,
@@ -50,7 +126,7 @@ export function AiChatWidget() {
       <button
         onClick={() => setOpen(true)}
         aria-label="Open AI chat"
-        className="fixed bottom-5 right-5 z-30 flex items-center justify-center size-13 rounded-full bg-brand-primary text-brand-primary-fg shadow-lg hover:bg-brand-primary-hover transition-colors"
+        className="fixed bottom-5 right-5 z-30 flex items-center justify-center rounded-full bg-brand-primary text-brand-primary-fg shadow-lg hover:bg-brand-primary-hover transition-colors"
         style={{ width: 52, height: 52 }}
       >
         <MessageCircle className="size-5" />
@@ -99,15 +175,40 @@ export function AiChatWidget() {
           </div>
         ))}
         <div className="flex gap-1.5 flex-wrap pt-2">
-          {SUGGESTIONS.map((s) => (
-            <button
-              key={s}
-              onClick={() => send(s)}
-              className="rounded-full bg-info-bg text-brand-primary px-3 py-1 text-xs font-medium border border-brand-primary/20 hover:bg-info-bg/80"
-            >
-              {s}
-            </button>
-          ))}
+          {suggestions.map((s) => {
+            const isAddCart = s === "Add it to my cart";
+            const alreadyAdded =
+              isAddCart &&
+              pendingOffer?.cartPayload &&
+              addedIds.has(pendingOffer.cartPayload.productId);
+            return (
+              <button
+                key={s}
+                onClick={() => send(s)}
+                disabled={!!alreadyAdded}
+                className={cn(
+                  "rounded-full px-3 py-1 text-xs font-medium border transition-colors",
+                  isAddCart && !alreadyAdded
+                    ? "bg-brand-primary text-brand-primary-fg border-brand-primary hover:bg-brand-primary-hover"
+                    : alreadyAdded
+                      ? "bg-success-bg text-success border-success/20 cursor-default"
+                      : "bg-info-bg text-brand-primary border-brand-primary/20 hover:bg-info-bg/80",
+                )}
+              >
+                {alreadyAdded ? (
+                  <span className="flex items-center gap-1">
+                    <Check className="size-3" /> Added
+                  </span>
+                ) : isAddCart ? (
+                  <span className="flex items-center gap-1">
+                    <ShoppingBag className="size-3" /> {s}
+                  </span>
+                ) : (
+                  s
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 

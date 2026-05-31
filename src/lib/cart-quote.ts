@@ -32,6 +32,8 @@ export interface QuoteInput {
     code: string;
     type: "percentage" | "fixed" | "free_shipping";
     value: number;
+    /** Scope string from the Discount table. "all" | "category:slug" | "product:id1,id2" */
+    scope?: string;
   };
   manualDiscountKobo?: number;
   shippingKobo?: number;
@@ -115,10 +117,21 @@ export function computeQuote(input: QuoteInput): Quote {
   let couponDiscountKobo = 0;
   let shippingOverride: number | undefined;
   if (input.coupon) {
+    // Scope filtering: "product:id1,id2" → only apply to matching lines.
+    // "all" or absent → apply to full afterBulk total.
+    const scope = input.coupon.scope ?? "all";
+    let couponBase = afterBulk;
+    if (scope.startsWith("product:")) {
+      const allowed = new Set(scope.slice("product:".length).split(",").map((s) => s.trim()));
+      couponBase = lines
+        .filter((l) => allowed.has(l.productId))
+        .reduce((a, l) => a + l.totalKobo, 0);
+    }
+
     if (input.coupon.type === "percentage") {
-      couponDiscountKobo = applyPercentageDiscount(afterBulk, input.coupon.value);
+      couponDiscountKobo = applyPercentageDiscount(couponBase, input.coupon.value);
     } else if (input.coupon.type === "fixed") {
-      couponDiscountKobo = Math.min(afterBulk, input.coupon.value);
+      couponDiscountKobo = Math.min(couponBase, input.coupon.value);
     } else if (input.coupon.type === "free_shipping") {
       shippingOverride = 0;
     }
@@ -173,7 +186,7 @@ export interface QuoteFromIdsInput {
 
 export interface QuoteFromIdsResult {
   quote: Quote;
-  couponApplied?: { code: string; type: "percentage" | "fixed" | "free_shipping"; value: number };
+  couponApplied?: { code: string; type: "percentage" | "fixed" | "free_shipping"; value: number; scope?: string };
   couponRejected?: string;
   shippingZone?: { name: string; etaDays: string };
 }
@@ -233,7 +246,7 @@ export async function quoteFromProductIds(
       (!c.validUntil || c.validUntil >= now) &&
       (c.usageLimit == null || c.usage < c.usageLimit)
     ) {
-      couponApplied = { code: c.code!, type: c.valueType, value: c.value };
+      couponApplied = { code: c.code!, type: c.valueType, value: c.value, scope: c.scope };
     } else if (c) {
       throw new AppError("COUPON_INVALID", "Coupon expired or has hit its usage limit", 422);
     } else {

@@ -1,36 +1,12 @@
 /**
  * POST /api/v1/checkout
  *
- * The single most important state-mutating endpoint. Reserves stock inside a
- * transaction with SELECT FOR UPDATE so two simultaneous buyers can't both
- * win the last unit (CLAUDE.md §6 + §20).
+ * Pay-on-delivery (POS/cash) checkout only.
+ * Bank-transfer orders go through /api/v1/checkout/initiate instead,
+ * where the order is created only after Nuqood confirms payment.
  *
  * Required headers:
- *   Idempotency-Key: <uuid>        — replay-safe per §7
- *
- * Request body:
- *   {
- *     cartId: string,
- *     items: [{ productId, variantId, quantity }],   // server re-validates
- *     contact: { name, phone, email? },
- *     shipping: { line1, line2?, city, state },
- *     paymentMethod: "nuqood" | "transfer" | "pod",
- *     couponCode?: string,
- *   }
- *
- * Response (201):
- *   {
- *     order: { id, number, status, paymentStatus, totalKobo, ... },
- *     payment: { paymentUrl?: string }   // for nuqood, Phase 5 wires the real URL
- *   }
- *
- * Errors:
- *   400 VALIDATION
- *   401 UNAUTHORIZED         — customer not signed in
- *   403 BLACKLISTED          — customer is blocked
- *   404 NOT_FOUND            — referenced product/variant gone
- *   409 STOCK_UNAVAILABLE    — concurrent buyer won the race
- *   409 IDEMPOTENCY_CONFLICT — same key, different body
+ *   Idempotency-Key: <uuid>
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -43,18 +19,11 @@ import { nextOrderNumber } from "@/lib/order-number";
 import { writeAudit } from "@/lib/audit";
 import { getCustomerSession } from "@/lib/customer-session";
 import { normaliseNigerianPhone } from "@/lib/phone";
-import { createDynamicAccount, nuqoodConfigured } from "@/lib/nuqood";
 import { emailOnOrderCreated } from "@/lib/order-emails";
-import { env } from "@/lib/env";
 import { SITE } from "@/lib/site";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { setGrantCookie, GRANT_COOKIE } from "@/lib/track-grant";
-import {
-  AppError,
-  BlacklistedError,
-  NotFoundError,
-  ValidationError,
-} from "@/lib/errors";
+import { AppError, BlacklistedError, NotFoundError, ValidationError } from "@/lib/errors";
 
 const bodySchema = z.object({
   cartId: z.string().min(1).optional(),
@@ -78,7 +47,8 @@ const bodySchema = z.object({
     city: z.string().min(1, "LGA is required"),
     state: z.string().min(1, "State is required"),
   }),
-  paymentMethod: z.enum(["nuqood", "bank_transfer", "pos", "cash"]),
+  // Only POS/cash accepted here. Bank transfer uses /checkout/initiate.
+  paymentMethod: z.enum(["pos", "cash"]),
   couponCode: z.string().optional(),
 });
 
@@ -90,7 +60,7 @@ export async function POST(req: NextRequest) {
     if (!hasDatabase) {
       throw new AppError(
         "DB_NOT_CONFIGURED",
-        "Checkout requires DATABASE_URL — set up Neon (docs/phase4-setup.md).",
+        "Checkout requires DATABASE_URL.",
         503,
       );
     }
@@ -98,16 +68,10 @@ export async function POST(req: NextRequest) {
     const parsed = bodySchema.safeParse(rawBody);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
-      throw new ValidationError({
-        [issue?.path.join(".") ?? "body"]: issue?.message ?? "Invalid",
-      });
+      throw new ValidationError({ [issue?.path.join(".") ?? "body"]: issue?.message ?? "Invalid" });
     }
     const body = parsed.data;
 
-    // Guest checkout — sign-in is optional. We find-or-create the customer
-    // record by their normalised phone number so the order is always
-    // attached to *some* customer (deduplicates repeat buyers without
-    // forcing them through an OTP first).
     const session = await getCustomerSession();
     const normalizedPhone = normaliseNigerianPhone(parsed.data.contact.phone);
 
@@ -123,31 +87,15 @@ export async function POST(req: NextRequest) {
           name: parsed.data.contact.name,
         },
       });
-    } else if (
-      // Auto-update fields when the buyer provides better info than we had.
-      (parsed.data.contact.email && !customer.email) ||
-      (parsed.data.contact.name && customer.name !== parsed.data.contact.name)
-    ) {
-      // Per CLAUDE.md §20 — when a customer's phone matches but name differs,
-      // we *could* ask for consent before overwriting. For now we only fill
-      // empty fields and never overwrite a non-empty name.
+    } else if (parsed.data.contact.email && !customer.email) {
       customer = await db.customer.update({
         where: { id: customer.id },
-        data: {
-          ...(parsed.data.contact.email && !customer.email && { email: parsed.data.contact.email }),
-        },
+        data: { email: parsed.data.contact.email },
       });
     }
     if (customer.blacklisted) throw new BlacklistedError();
 
     const result = await withIdempotency(idempotencyKey, body, async () => {
-      // ── Read-only hydration happens OUTSIDE the transaction. These reads are
-      //    network-bound (Neon round-trips) and don't need transactional
-      //    consistency — prices read here and used in the order are the
-      //    buyer's quoted prices. Keeping them out of the txn cuts the
-      //    interactive-transaction window from ~8 round-trips to ~3.
-
-      // 1. Hydrate products + variants
       const productIds = Array.from(new Set(body.items.map((i) => i.productId)));
       const products = await db.product.findMany({
         where: { id: { in: productIds }, archivedAt: null },
@@ -158,55 +106,31 @@ export async function POST(req: NextRequest) {
       const inputLines: QuoteInputLine[] = body.items.map((item) => {
         const p = productById.get(item.productId);
         if (!p) throw new NotFoundError(`Product ${item.productId}`);
-
-        const variant = item.variantId
-          ? p.variants.find((v) => v.id === item.variantId)
-          : null;
-        if (item.variantId && !variant) {
-          throw new NotFoundError(`Variant ${item.variantId}`);
-        }
-
+        const variant = item.variantId ? p.variants.find((v) => v.id === item.variantId) : null;
+        if (item.variantId && !variant) throw new NotFoundError(`Variant ${item.variantId}`);
         const unitKobo = Number(
           variant?.priceKobo ?? (p.saleActive && p.saleKobo != null ? p.saleKobo : p.priceKobo),
         );
-
         return {
           productId: p.id,
           variantId: variant?.id ?? null,
           quantity: item.quantity,
           unitKobo,
-          bulkTiers: p.bulkTiers.map((t) => ({
-            min: t.min,
-            max: t.max,
-            type: t.type,
-            value: t.value,
-          })),
+          bulkTiers: p.bulkTiers.map((t) => ({ min: t.min, max: t.max, type: t.type, value: t.value })),
         };
       });
 
-      // 2. Coupon validation (read-only — usage increment happens inside the txn)
-      let coupon:
-        | { code: string; type: "percentage" | "fixed" | "free_shipping"; value: number }
-        | undefined;
+      let coupon: { code: string; type: "percentage" | "fixed" | "free_shipping"; value: number; scope?: string } | undefined;
       if (body.couponCode) {
-        const c = await db.discount.findUnique({
-          where: { code: body.couponCode.toUpperCase() },
-        });
+        const c = await db.discount.findUnique({ where: { code: body.couponCode.toUpperCase() } });
         const now = new Date();
-        if (
-          c &&
-          c.active &&
-          (!c.validFrom || c.validFrom <= now) &&
-          (!c.validUntil || c.validUntil >= now) &&
-          (c.usageLimit == null || c.usage < c.usageLimit)
-        ) {
-          coupon = { code: c.code!, type: c.valueType, value: c.value };
+        if (c && c.active && (!c.validFrom || c.validFrom <= now) && (!c.validUntil || c.validUntil >= now) && (c.usageLimit == null || c.usage < c.usageLimit)) {
+          coupon = { code: c.code!, type: c.valueType, value: c.value, scope: c.scope };
         } else if (c) {
           throw new AppError("COUPON_INVALID", "Coupon no longer valid", 422);
         }
       }
 
-      // 3. Shipping zone + free-over check (read-only)
       let shippingKobo = 0;
       let freeShippingEligible = false;
       let shippingZoneId: string | null = null;
@@ -219,38 +143,23 @@ export async function POST(req: NextRequest) {
         shippingKobo = Number(zone.baseRateKobo);
         if (zone.freeOverKobo != null) {
           const dry = computeQuote({ lines: inputLines });
-          if (BigInt(dry.subtotalKobo - dry.bulkDiscountKobo) >= zone.freeOverKobo) {
-            freeShippingEligible = true;
-          }
+          if (BigInt(dry.subtotalKobo - dry.bulkDiscountKobo) >= zone.freeOverKobo) freeShippingEligible = true;
         }
       } else {
         const fb = await db.fallbackShipping.findFirst();
         if (fb?.enabled) shippingKobo = Number(fb.flatRateKobo);
       }
 
-      // 4. Server-side quote (authoritative)
-      const quote = computeQuote({
-        lines: inputLines,
-        ...(coupon && { coupon }),
-        shippingKobo,
-        freeShippingEligible,
-      });
+      const quote = computeQuote({ lines: inputLines, ...(coupon && { coupon }), shippingKobo, freeShippingEligible });
 
       const order = await db.$transaction(async (tx) => {
-        // 5. Reserve stock — this is the SELECT FOR UPDATE block per §6
         await reserveStock(
           tx,
-          inputLines.map((l) => ({
-            productId: l.productId,
-            variantId: l.variantId,
-            quantity: l.quantity,
-          })),
-          null, // we don't have the order id yet — set below after order create
+          inputLines.map((l) => ({ productId: l.productId, variantId: l.variantId, quantity: l.quantity })),
+          null,
         );
 
-        // 6. Create the order — phone already normalised above
         const orderNumber = await nextOrderNumber(tx);
-
         const order = await tx.order.create({
           data: {
             number: orderNumber,
@@ -268,7 +177,7 @@ export async function POST(req: NextRequest) {
             subtotalKobo: BigInt(quote.subtotalKobo),
             bulkDiscountKobo: BigInt(quote.bulkDiscountKobo),
             couponDiscountKobo: BigInt(quote.couponDiscountKobo),
-            manualDiscountKobo: BigInt(quote.manualDiscountKobo),
+            manualDiscountKobo: BigInt(0),
             shippingKobo: BigInt(quote.shippingKobo),
             totalKobo: BigInt(quote.totalKobo),
             paidKobo: BigInt(0),
@@ -295,107 +204,29 @@ export async function POST(req: NextRequest) {
           include: { lines: true },
         });
 
-        // 7. Attach the new orderId to the just-created reservations
         await tx.stockReservation.updateMany({
           where: { orderId: null, status: "active" },
           data: { orderId: order.id },
         });
 
-        // 8. Bump coupon usage
         if (coupon) {
-          await tx.discount.update({
-            where: { code: coupon.code },
-            data: { usage: { increment: 1 }, locked: true },
-          });
+          await tx.discount.update({ where: { code: coupon.code }, data: { usage: { increment: 1 }, locked: true } });
         }
 
-        // 9. Audit
         await writeAudit(
           {
             actorType: "customer",
             action: "order.create",
             entityType: "order",
             entityId: order.id,
-            after: {
-              number: order.number,
-              totalKobo: Number(order.totalKobo),
-              items: order.lines.length,
-            },
+            after: { number: order.number, totalKobo: Number(order.totalKobo), items: order.lines.length },
           },
           tx,
         );
 
         return order;
-      }, {
-        // Neon cold-start + multi-step txn: 5s default is too tight. The txn
-        // body itself is small (SELECT FOR UPDATE + a few inserts), but each
-        // round-trip pays Neon's network latency.
-        timeout: 20_000,
-        maxWait: 10_000,
-      });
+      }, { timeout: 20_000, maxWait: 10_000 });
 
-      // Nuqood payment link — created AFTER the txn closes so we don't hold
-      // the connection open across a third-party network call. The OrderPayment
-      // row is written here as `pending`; the /webhooks/nuqood handler flips it
-      // to `completed` when Nuqood confirms.
-      let paymentUrl: string | null = null;
-      let bankTransferDetails: {
-        accountNumber: string;
-        accountName: string;
-        bank: string;
-      } | null = null;
-      let nuqoodLive = false;
-      let paymentReference: string | null = null;
-
-      if (body.paymentMethod === "nuqood" && nuqoodConfigured) {
-        const callbackUrl = `${SITE.url}/api/v1/webhooks/nuqood${
-          env.NUQOOD_WEBHOOK_SECRET
-            ? `?token=${encodeURIComponent(env.NUQOOD_WEBHOOK_SECRET)}`
-            : ""
-        }`;
-        const customerEmail =
-          parsed.data.contact.email ??
-          customer.email ??
-          `order-${order.number}@${SITE.url.replace(/^https?:\/\//, "")}`;
-
-        try {
-          const account = await createDynamicAccount({
-            email: customerEmail,
-            amountKobo: Number(order.totalKobo),
-            callbackUrl,
-          });
-          paymentReference = account.ref;
-          paymentUrl = account.checkoutUrl;
-          bankTransferDetails = {
-            accountNumber: account.number,
-            accountName: account.name,
-            bank: account.bank,
-          };
-          nuqoodLive = true;
-
-          await db.orderPayment.create({
-            data: {
-              orderId: order.id,
-              method: "nuqood",
-              amountKobo: order.totalKobo,
-              reference: account.ref,
-              status: "pending",
-            },
-          });
-        } catch (err) {
-          // Nuqood failure shouldn't tank the order — staff can still record
-          // payment manually. We log + leave paymentUrl null so the UI can
-          // gracefully fall back.
-          console.error("[checkout] Nuqood request failed:", err);
-        }
-      } else if (body.paymentMethod === "nuqood") {
-        // Nuqood path requested but creds missing — fall back to a stub URL
-        // so design-mode dev still works.
-        paymentUrl = `/orders/${order.number}`;
-      }
-
-      // Fire the order-confirmation email. Fire-and-forget — failure shouldn't
-      // tank the order. Helper is self-defensive (skips when no customer email).
       void emailOnOrderCreated(order.id);
 
       return {
@@ -408,12 +239,6 @@ export async function POST(req: NextRequest) {
             totalKobo: Number(order.totalKobo),
             paidKobo: Number(order.paidKobo),
           },
-          payment: {
-            paymentUrl,
-            ...(paymentReference && { reference: paymentReference }),
-            ...(bankTransferDetails && { bankTransfer: bankTransferDetails }),
-            nuqoodLive,
-          },
         },
         statusCode: 201,
       };
@@ -423,14 +248,7 @@ export async function POST(req: NextRequest) {
       status: result.statusCode,
       ...(result.replay && { headers: { "Idempotency-Replay": "true" } }),
     });
-    // Guest checkouts also need to see their confirmation page. Mint a
-    // 24h grant cookie scoped to the newly-created order number so the
-    // /orders/[number] page renders without requiring login.
-    setGrantCookie(
-      res.cookies,
-      result.response.order.number,
-      req.cookies.get(GRANT_COOKIE)?.value,
-    );
+    setGrantCookie(res.cookies, result.response.order.number, req.cookies.get(GRANT_COOKIE)?.value);
     return res;
   } catch (err) {
     return handleApiError(err);

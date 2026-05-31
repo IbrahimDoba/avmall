@@ -45,7 +45,7 @@ export function ProductCard({ product, priority, className }: ProductCardProps) 
           )}
         </div>
 
-        <WishlistButton />
+        <WishlistButton productId={product.id} />
 
 
         {oos && (

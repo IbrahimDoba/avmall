@@ -3,7 +3,8 @@
 import * as React from "react";
 import { Select } from "@/components/ui/select";
 import { Field } from "@/components/ui/field";
-import { NIGERIAN_STATES, LAGOS_LGAS } from "@/lib/mock-data";
+import { NIGERIAN_STATES } from "@/lib/mock-data";
+import { NIGERIA_LGAS } from "@/lib/nigeria-lgas";
 
 interface AddressPickerProps {
   state: string;
@@ -13,10 +14,6 @@ interface AddressPickerProps {
   className?: string;
 }
 
-/**
- * Two cascading selects — Nigerian state → LGA.
- * Currently only Lagos has populated LGAs (real list will come in Phase 4 seed).
- */
 export function AddressPicker({
   state,
   city,
@@ -24,10 +21,10 @@ export function AddressPicker({
   onCityChange,
   className,
 }: AddressPickerProps) {
-  const lgas: readonly string[] = state === "Lagos" ? LAGOS_LGAS : ["—"];
+  const lgas: readonly string[] = NIGERIA_LGAS[state] ?? [];
 
   React.useEffect(() => {
-    if (!lgas.includes(city)) {
+    if (lgas.length > 0 && !lgas.includes(city)) {
       onCityChange(lgas[0]!);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -45,13 +42,22 @@ export function AddressPicker({
             ))}
           </Select>
         </Field>
-        <Field id="lga" label="LGA">
-          <Select id="lga" value={city} onChange={(e) => onCityChange(e.target.value)}>
-            {lgas.map((l) => (
-              <option key={l} value={l}>
-                {l}
-              </option>
-            ))}
+        <Field id="lga" label="LGA / Area">
+          <Select
+            id="lga"
+            value={city}
+            onChange={(e) => onCityChange(e.target.value)}
+            disabled={lgas.length === 0}
+          >
+            {lgas.length === 0 ? (
+              <option value="">Select state first</option>
+            ) : (
+              lgas.map((l) => (
+                <option key={l} value={l}>
+                  {l}
+                </option>
+              ))
+            )}
           </Select>
         </Field>
       </div>

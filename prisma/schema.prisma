@@ -781,6 +781,41 @@ model PasswordReset {
   @@map("password_resets")
 }
 
+// ─── Pending checkout sessions (bank-transfer, pre-order-creation) ───────
+//
+// Created when the customer clicks "Pay" for a Nuqood bank transfer.
+// No Order row exists until the Nuqood webhook fires confirming payment.
+// Expires in 30 minutes (matching Nuqood's dynamic account window).
+
+model PendingCheckout {
+  id          String   @id @default(uuid()) @db.Uuid
+  /// Nuqood `ref` from get_dynamic_account — matches webhook transaction_reference.
+  nuqoodRef   String   @unique @map("nuqood_ref")
+  /// PalmPay virtual account number assigned by Nuqood.
+  bankNumber  String   @map("bank_number")
+  bankName    String   @map("bank_name")
+  bankAccount String   @map("bank_account")
+  amountKobo  BigInt   @map("amount_kobo")
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz
+  /// Serialised cart items: [{ productId, variantId, quantity }]
+  items       Json
+  contact     Json
+  shipping    Json
+  couponCode  String?  @map("coupon_code")
+  /// "pending" | "paid" | "expired"
+  status      String   @default("pending")
+  /// Set by webhook handler when order is created.
+  orderId     String?  @map("order_id") @db.Uuid
+  orderNumber String?  @map("order_number")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([nuqoodRef])
+  @@index([bankNumber])
+  @@index([expiresAt])
+  @@map("pending_checkouts")
+}
+
 // ─── Idempotency keys ────────────────────────────────────────────────────
 
 model IdempotencyKey {

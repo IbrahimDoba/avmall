@@ -129,7 +129,7 @@ export async function POST(
     return NextResponse.json(
       apiSuccess({
         reference: account.ref,
-        paymentUrl: account.checkoutUrl,
+        paymentUrl: null,
         amountKobo,
         expiresAt: expiresAt.toISOString(),
         nuqoodLive: true,

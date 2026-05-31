@@ -1,5 +1,5 @@
 /**
- * Nuqood client — typed wrapper around the few REST endpoints we use.
+ * Nuqood client — typed wrapper around the REST endpoints we use.
  *
  * Docs: https://nuqood.ng/documentation
  *
@@ -9,10 +9,10 @@
  *
  * Every request body also carries `business_code` (env NUQOOD_BUSINESS_CODE).
  *
- * Currency note: the docs say `amount: String|Int` with no unit. Nuqood is
- * Nigerian-only and we believe the field is in whole Naira (NOT kobo), so we
- * convert kobo → naira before sending. If a test transaction comes through
- * 100× too small, flip CURRENCY_IN_KOBO to true here and that's the fix.
+ * Currency note: the API takes `amount` in whole Naira (NOT kobo).
+ * We convert kobo → naira before sending. See amountForNuqood().
+ *
+ * Only PALMPAY (bank code 100033) is supported for dynamic accounts.
  */
 
 import "server-only";
@@ -21,10 +21,8 @@ import { env } from "@/lib/env";
 import { AppError } from "@/lib/errors";
 
 const DEFAULT_BASE = "https://nuqood.ng";
-const CURRENCY_IN_KOBO = false;
 
-/** True when every required Nuqood env var is set. Endpoints fall back to a
- *  storefront-hosted stub URL when this is false. */
+/** True when every required Nuqood env var is set. */
 export const nuqoodConfigured: boolean =
   !!env.NUQOOD_API_KEY && !!env.NUQOOD_SECRET_KEY && !!env.NUQOOD_BUSINESS_CODE;
 
@@ -47,63 +45,72 @@ function authHeaders(): Record<string, string> {
   };
 }
 
-/** Convert our internal kobo to whatever Nuqood expects for `amount`. */
+/** Convert our internal kobo to Nuqood's Naira amount field. */
 export function amountForNuqood(kobo: number): number {
-  return CURRENCY_IN_KOBO ? kobo : Math.floor(kobo / 100);
+  return Math.floor(kobo / 100);
 }
 
-/** Convert a webhook payload's `amount` back to our internal kobo. */
+/** Convert a webhook payload's `amount` (Naira) back to our internal kobo. */
 export function amountFromNuqood(value: number | string): number {
   const n = typeof value === "string" ? parseFloat(value) : value;
   if (!Number.isFinite(n)) return 0;
-  return CURRENCY_IN_KOBO ? Math.round(n) : Math.round(n * 100);
+  return Math.round(n * 100);
 }
 
-/** Shape of POST /api/v1/get_dynamic_account response per docs. */
+/**
+ * Parse Nuqood's `time_left` string into seconds.
+ * Docs return "30 minutes." — handles minutes, seconds, hours.
+ * Falls back to 1800s (30 min) if unparseable.
+ */
+export function parseTimeLeft(timeLeft: string): number {
+  const cleaned = timeLeft.toLowerCase().replace(/\./g, "").trim();
+  const match = cleaned.match(/(\d+)\s*(hour|hr|minute|min|second|sec)/);
+  if (!match || !match[1] || !match[2]) return 30 * 60;
+  const n = parseInt(match[1], 10);
+  const unit = match[2];
+  if (unit.startsWith("hour") || unit === "hr") return n * 3600;
+  if (unit.startsWith("minute") || unit === "min") return n * 60;
+  return n;
+}
+
 export interface NuqoodDynamicAccount {
   ref: string;
   number: string;
   name: string;
   bank: string;
+  /** e.g. "30 minutes." — use parseTimeLeft() to convert */
   time_left: string;
-  checkoutUrl: string;
 }
 
 export interface CreateDynamicAccountInput {
   email: string;
   amountKobo: number;
-  /// Where Nuqood should POST the success webhook. Include the URL token.
-  callbackUrl: string;
+  callbackUrl?: string;
 }
 
 /**
- * Spin up a one-shot virtual account / hosted-checkout link. The customer
- * is shown the bank details (or sent to checkoutUrl) and Nuqood POSTs our
- * callback when the transfer lands.
+ * Spin up a one-shot virtual account (PalmPay) for a specific amount.
+ * The customer is shown the bank details and must transfer the exact amount.
+ * Nuqood POSTs our callback when the transfer lands.
  */
 export async function createDynamicAccount(
   input: CreateDynamicAccountInput,
 ): Promise<NuqoodDynamicAccount> {
-  const body = {
+  const body: Record<string, unknown> = {
     business_code: env.NUQOOD_BUSINESS_CODE,
     email: input.email,
     amount: amountForNuqood(input.amountKobo),
-    callback: input.callbackUrl,
+    ...(input.callbackUrl && { callback: input.callbackUrl }),
   };
 
   const res = await fetch(`${baseUrl()}/api/v1/get_dynamic_account`, {
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify(body),
-    // Network calls on the request path — keep them tight.
     signal: AbortSignal.timeout(12_000),
   });
 
-  let json: {
-    status?: boolean;
-    desc?: string;
-    account?: NuqoodDynamicAccount;
-  };
+  let json: { status?: boolean; desc?: string; account?: NuqoodDynamicAccount };
   try {
     json = await res.json();
   } catch {
@@ -125,10 +132,7 @@ export async function createDynamicAccount(
   return json.account;
 }
 
-/**
- * Shape of the inbound webhook payload per docs. Field names match Nuqood
- * exactly — don't rename without re-reading the docs.
- */
+/** Shape of the inbound webhook payload. Field names match Nuqood exactly. */
 export interface NuqoodWebhookPayload {
   email?: string;
   phone?: string;

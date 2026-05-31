@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
     // requested method is Nuqood. Falls back to the storefront tracking page
     // for bank_transfer (or any time Nuqood isn't configured).
     let reference: string;
-    let paymentUrl: string;
+    let paymentUrl: string | null;
     let bankDetails: { number: string; name: string; bank: string } | null = null;
     let nuqoodLive = false;
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h
@@ -126,7 +126,7 @@ export async function POST(req: NextRequest) {
       });
 
       reference = account.ref;
-      paymentUrl = account.checkoutUrl;
+      paymentUrl = null;
       bankDetails = {
         number: account.number,
         name: account.name,

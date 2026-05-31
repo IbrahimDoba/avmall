@@ -3,6 +3,8 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { MessageCircle, ShoppingBag, Tag, Heart, Bell, Check, Loader2 } from "lucide-react";
+import { useWishlist } from "@/stores/wishlist-store";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Money } from "@/components/ui/money";
@@ -14,12 +16,13 @@ import { useCart } from "@/stores/cart-store";
 import { applyPercentageDiscount, formatMoney } from "@/lib/money";
 import type { Product } from "@/lib/mock-data";
 import { toast } from "@/components/ui/toaster";
-import { cn } from "@/lib/utils";
 
 export function PDPDetail({ product }: { product: Product }) {
   const router = useRouter();
   const add = useCart((s) => s.add);
   const cartLines = useCart((s) => s.lines);
+  const toggleWishlist = useWishlist((s) => s.toggle);
+  const inWishlist = useWishlist((s) => s.has(product.id));
 
   const defaultVariant =
     product.variants.find((v) => v.stock > 0) ?? product.variants[0]!;
@@ -198,8 +201,14 @@ export function PDPDetail({ product }: { product: Product }) {
             <ShoppingBag className="size-4" />
           </Button>
         )}
-        <Button size="lg" variant="secondary" aria-label="Save to wishlist">
-          <Heart className="size-4" />
+        <Button
+          size="lg"
+          variant="secondary"
+          aria-label={inWishlist ? "Remove from wishlist" : "Save to wishlist"}
+          onClick={() => toggleWishlist(product.id)}
+          className={cn(inWishlist && "text-danger border-danger/40 bg-danger/5")}
+        >
+          <Heart className={cn("size-4", inWishlist && "fill-current")} />
         </Button>
       </div>
 
@@ -211,10 +220,8 @@ export function PDPDetail({ product }: { product: Product }) {
           <TabsTrigger value="returns">returns</TabsTrigger>
         </TabsList>
         <TabsContent value="description">
-          <p className="text-sm text-fg-muted leading-relaxed">
-            {product.short}. Crafted in small batches with sustainably-sourced ingredients. Performs as
-            both a weekly mask and a spot treatment. Shelf life: 12 months unopened, 6 months once
-            opened.
+          <p className="text-sm text-fg-muted leading-relaxed whitespace-pre-line">
+            {product.short ?? "No description available for this product."}
           </p>
         </TabsContent>
         <TabsContent value="shipping">
