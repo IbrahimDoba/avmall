@@ -8,10 +8,13 @@ import {
   Download,
   MoreHorizontal,
   MessageCircle,
-  Mail,
   Printer,
   XCircle,
   Eye,
+  CheckCircle,
+  Package,
+  Truck,
+  MapPin,
 } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { AdminTopBar } from "@/components/admin/topbar";
@@ -71,6 +74,7 @@ export function OrdersListClient({ orders, totals }: Props) {
   const [rowSelection, setRowSelection] = React.useState({});
   const [cancelTarget, setCancelTarget] = React.useState<OrderListRow | null>(null);
   const [cancelLoading, setCancelLoading] = React.useState(false);
+  const [statusLoading, setStatusLoading] = React.useState<string | null>(null);
 
   const filters: FilterConfig[] = [
     { id: "status", label: "Status", values: statusValues, options: STATUS_OPTIONS, multi: true },
@@ -135,6 +139,28 @@ export function OrdersListClient({ orders, totals }: Props) {
     [filtered, rowSelection],
   );
 
+  async function changeStatus(number: string, status: string) {
+    setStatusLoading(number);
+    try {
+      const res = await fetch(`/api/v1/admin/orders/${encodeURIComponent(number)}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json?.error?.message ?? "Could not update status");
+        return;
+      }
+      toast.success(`Order ${number} → ${status}`);
+      router.refresh();
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setStatusLoading(null);
+    }
+  }
+
   async function bulkCancel() {
     if (selectedNumbers.length === 0) {
       toast.error("Nothing to cancel — selection contains no cancellable orders.");
@@ -178,7 +204,14 @@ export function OrdersListClient({ orders, totals }: Props) {
       header: "Customer",
       cell: ({ row }) => (
         <div>
-          <div className="font-semibold">{row.original.customerName}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="font-semibold">{row.original.customerName}</span>
+            {!row.original.customerEmail && (
+              <span className="text-[9px] font-bold uppercase tracking-wider px-1 py-0.5 rounded bg-surface-2 text-fg-muted">
+                Guest
+              </span>
+            )}
+          </div>
           <div className="text-[11px] text-fg-muted font-mono tabular">
             {row.original.customerPhone}
           </div>
@@ -241,8 +274,43 @@ export function OrdersListClient({ orders, totals }: Props) {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => router.push(`/admin/orders/${row.original.number}`)}>
-                <Eye className="size-3.5" /> View
+                <Eye className="size-3.5" /> View details
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {/* Status transitions — only show the valid next step */}
+              {row.original.status === "pending" && (
+                <DropdownMenuItem
+                  disabled={statusLoading === row.original.number}
+                  onClick={() => changeStatus(row.original.number, "confirmed")}
+                >
+                  <CheckCircle className="size-3.5 text-brand-primary" /> Confirm order
+                </DropdownMenuItem>
+              )}
+              {row.original.status === "confirmed" && (
+                <DropdownMenuItem
+                  disabled={statusLoading === row.original.number}
+                  onClick={() => changeStatus(row.original.number, "processing")}
+                >
+                  <Package className="size-3.5 text-status-processing" /> Mark processing
+                </DropdownMenuItem>
+              )}
+              {row.original.status === "processing" && (
+                <DropdownMenuItem
+                  disabled={statusLoading === row.original.number}
+                  onClick={() => changeStatus(row.original.number, "shipped")}
+                >
+                  <Truck className="size-3.5 text-status-shipped" /> Mark shipped
+                </DropdownMenuItem>
+              )}
+              {row.original.status === "shipped" && (
+                <DropdownMenuItem
+                  disabled={statusLoading === row.original.number}
+                  onClick={() => changeStatus(row.original.number, "delivered")}
+                >
+                  <MapPin className="size-3.5 text-success" /> Mark delivered
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() =>
                   window.open(
@@ -265,7 +333,11 @@ export function OrdersListClient({ orders, totals }: Props) {
               <DropdownMenuItem
                 destructive
                 onClick={() => setCancelTarget(row.original)}
-                disabled={row.original.status === "cancelled" || row.original.status === "delivered"}
+                disabled={
+                  row.original.status === "cancelled" ||
+                  row.original.status === "delivered" ||
+                  row.original.status === "shipped"
+                }
               >
                 <XCircle className="size-3.5" /> Cancel order
               </DropdownMenuItem>
@@ -367,13 +439,31 @@ export function OrdersListClient({ orders, totals }: Props) {
         cancelLabel="Keep order"
         destructive
         loading={cancelLoading}
-        onConfirm={() => {
+        onConfirm={async () => {
+          if (!cancelTarget) return;
           setCancelLoading(true);
-          window.setTimeout(() => {
-            setCancelLoading(false);
+          try {
+            const res = await fetch(
+              `/api/v1/admin/orders/${encodeURIComponent(cancelTarget.number)}/cancel`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ reason: "Cancelled by staff" }),
+              },
+            );
+            const json = await res.json();
+            if (!res.ok) {
+              toast.error(json?.error?.message ?? "Could not cancel order");
+              return;
+            }
+            toast.success(`Order ${cancelTarget.number} cancelled`);
             setCancelTarget(null);
-            toast.success(`Order ${cancelTarget?.number} cancelled`);
-          }, 500);
+            router.refresh();
+          } catch {
+            toast.error("Network error");
+          } finally {
+            setCancelLoading(false);
+          }
         }}
       />
     </>

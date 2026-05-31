@@ -14,6 +14,7 @@ export interface OrderListRow {
   number: string;
   customerName: string;
   customerPhone: string;
+  customerEmail: string | null;
   items: number;
   totalKobo: number;
   outstandingKobo: number;
@@ -28,6 +29,7 @@ export const ORDERS_LIST: readonly OrderListRow[] = [
   {
     number: "AVM-2841",
     customerName: "Tolu Adeniyi",
+    customerEmail: null,
     customerPhone: "+234 803 421 7790",
     items: 3,
     totalKobo: 6294000,
@@ -41,6 +43,7 @@ export const ORDERS_LIST: readonly OrderListRow[] = [
   {
     number: "AVM-2840",
     customerName: "Chiamaka O.",
+    customerEmail: null,
     customerPhone: "+234 802 119 4421",
     items: 1,
     totalKobo: 1450000,
@@ -54,6 +57,7 @@ export const ORDERS_LIST: readonly OrderListRow[] = [
   {
     number: "AVM-2839",
     customerName: "Bisi Akande",
+    customerEmail: null,
     customerPhone: "+234 805 887 2210",
     items: 5,
     totalKobo: 12180000,
@@ -67,6 +71,7 @@ export const ORDERS_LIST: readonly OrderListRow[] = [
   {
     number: "AVM-2838",
     customerName: "Emeka N.",
+    customerEmail: null,
     customerPhone: "+234 803 552 1144",
     items: 2,
     totalKobo: 3960000,
@@ -80,6 +85,7 @@ export const ORDERS_LIST: readonly OrderListRow[] = [
   {
     number: "AVM-2837",
     customerName: "Aisha M.",
+    customerEmail: null,
     customerPhone: "+234 814 220 6688",
     items: 4,
     totalKobo: 8420000,
@@ -93,6 +99,7 @@ export const ORDERS_LIST: readonly OrderListRow[] = [
   {
     number: "AVM-2836",
     customerName: "Femi Alabi",
+    customerEmail: null,
     customerPhone: "+234 802 444 7012",
     items: 1,
     totalKobo: 720000,
@@ -106,6 +113,7 @@ export const ORDERS_LIST: readonly OrderListRow[] = [
   {
     number: "AVM-2835",
     customerName: "Ngozi U.",
+    customerEmail: null,
     customerPhone: "+234 803 991 2204",
     items: 3,
     totalKobo: 5840000,
@@ -119,6 +127,7 @@ export const ORDERS_LIST: readonly OrderListRow[] = [
   {
     number: "AVM-2834",
     customerName: "Olumide T.",
+    customerEmail: null,
     customerPhone: "+234 805 220 9911",
     items: 2,
     totalKobo: 2980000,
@@ -132,6 +141,7 @@ export const ORDERS_LIST: readonly OrderListRow[] = [
   {
     number: "AVM-2833",
     customerName: "Kemi B.",
+    customerEmail: null,
     customerPhone: "+234 803 770 4422",
     items: 6,
     totalKobo: 14400000,
@@ -145,6 +155,7 @@ export const ORDERS_LIST: readonly OrderListRow[] = [
   {
     number: "AVM-2832",
     customerName: "Ibrahim Y.",
+    customerEmail: null,
     customerPhone: "+234 814 110 5566",
     items: 1,
     totalKobo: 4200000,

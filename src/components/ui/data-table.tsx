@@ -199,7 +199,7 @@ export function DataTable<TData>({
                     <td
                       key={cell.id}
                       onClick={
-                        cell.column.id === "__select"
+                        cell.column.id === "__select" || cell.column.id === "actions"
                           ? (e) => e.stopPropagation()
                           : undefined
                       }

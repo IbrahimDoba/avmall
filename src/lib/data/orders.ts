@@ -106,7 +106,7 @@ export async function listAdminOrders(): Promise<OrderListRow[]> {
     orderBy: { createdAt: "desc" },
     take: 200,
     include: {
-      customer: { select: { name: true, phone: true } },
+      customer: { select: { name: true, phone: true, email: true } },
       lines: { select: { id: true } },
       createdBy: { select: { name: true } },
     },
@@ -119,6 +119,7 @@ export async function listAdminOrders(): Promise<OrderListRow[]> {
       number: o.number,
       customerName: o.customer?.name ?? o.shipName,
       customerPhone: o.customer?.phone ?? o.shipPhone,
+      customerEmail: o.customer?.email ?? null,
       items: o.lines.length,
       totalKobo: total,
       outstandingKobo: total - paid,
