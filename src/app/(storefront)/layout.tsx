@@ -1,6 +1,7 @@
 import { TopNav } from "@/components/storefront/top-nav";
 import { StorefrontFooter } from "@/components/storefront/footer";
 import { Toaster } from "@/components/ui/toaster";
+import { PaymentRecovery } from "@/components/storefront/payment-recovery";
 import { SITE } from "@/lib/site";
 
 // Organisation JSON-LD — Google reads this once for the whole site.
@@ -43,6 +44,7 @@ export default function StorefrontLayout({ children }: { children: React.ReactNo
         dangerouslySetInnerHTML={{ __html: JSON.stringify(ORG_SCHEMA) }}
       />
       <TopNav />
+      <PaymentRecovery />
       <main className="flex-1">{children}</main>
       <StorefrontFooter />
       <Toaster />
