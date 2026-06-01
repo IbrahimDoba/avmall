@@ -4,7 +4,8 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn, useSession } from "next-auth/react";
-import { Lock, Eye, EyeOff } from "lucide-react";
+import Image from "next/image";
+import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
@@ -40,9 +41,14 @@ export default function AdminLoginPage() {
 
   return (
     <div>
-      <div className="size-12 rounded-md bg-info-bg text-brand-primary flex items-center justify-center mb-4">
-        <Lock className="size-6" />
-      </div>
+      <Image
+        src="/brand/monogram.png"
+        alt="Avmall"
+        width={48}
+        height={48}
+        className="mb-4 rounded-md"
+        priority
+      />
       <h1 className="font-display text-3xl font-semibold tracking-tight mb-2">
         Avmall admin
       </h1>

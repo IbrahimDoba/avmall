@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
@@ -131,6 +132,14 @@ export default function CustomerLoginPage() {
 
   return (
     <div>
+      <Image
+        src="/brand/monogram.png"
+        alt="Avmall"
+        width={48}
+        height={48}
+        className="mb-4 rounded-md"
+        priority
+      />
       <h1 className="font-display text-3xl font-semibold tracking-tight mb-2">
         Sign in to Avmall
       </h1>

@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { ProductCard } from "@/components/storefront/product-card";
 import { NewsletterSignup } from "@/components/storefront/newsletter-signup";
 import { listProducts } from "@/lib/data/products";
+import { SITE } from "@/lib/site";
 
 // Live product data — revalidate every 5 min so first request after a cold
 // Neon wake-up isn't a hard prerender failure during build.
@@ -210,9 +211,16 @@ export default async function HomePage() {
               us to get a quote for your shop.
             </p>
           </div>
-          <Button size="lg" className="shrink-0">
-            <MessageCircle className="size-4" /> Open a wholesale chat
-          </Button>
+          <a
+            href={`https://wa.me/${SITE.whatsappNumber.replace(/\D/g, "")}?text=${encodeURIComponent("Hi, I'm interested in wholesale pricing for my shop.")}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0"
+          >
+            <Button size="lg">
+              <MessageCircle className="size-4" /> Open a wholesale chat
+            </Button>
+          </a>
         </div>
       </section>
 
