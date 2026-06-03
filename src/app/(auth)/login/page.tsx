@@ -174,11 +174,11 @@ export default function CustomerLoginPage() {
 
       <p className="text-xs text-fg-muted mt-6 text-center">
         By continuing you agree to our{" "}
-        <Link href="#" className="text-brand-primary hover:underline">
+        <Link href="/terms" className="text-brand-primary hover:underline">
           Terms
         </Link>{" "}
         and{" "}
-        <Link href="#" className="text-brand-primary hover:underline">
+        <Link href="/privacy" className="text-brand-primary hover:underline">
           Privacy
         </Link>
         .
