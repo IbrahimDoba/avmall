@@ -23,6 +23,8 @@ import {
   Pencil,
   Trash2,
   Send,
+  Search,
+  LockKeyhole,
 } from "lucide-react";
 import { AdminTopBar } from "@/components/admin/topbar";
 import { Button } from "@/components/ui/button";
@@ -144,6 +146,61 @@ export function OrderDetailClient({ params, order }: PageProps) {
   const [editQtyValue, setEditQtyValue] = React.useState(1);
   const [removeTarget, setRemoveTarget] = React.useState<LineItem | null>(null);
   const [lineActionLoading, setLineActionLoading] = React.useState(false);
+
+  // Add item dialog
+  interface ProductHit {
+    id: string; slug: string; name: string; brand: string;
+    imageUrl: string; priceKobo: number; saleKobo: number | null;
+    saleActive: boolean; stock: number;
+  }
+  const [addItemOpen, setAddItemOpen] = React.useState(false);
+  const [addItemSearch, setAddItemSearch] = React.useState("");
+  const [addItemMatches, setAddItemMatches] = React.useState<ProductHit[]>([]);
+  const [addItemSearching, setAddItemSearching] = React.useState(false);
+  const [addItemSelected, setAddItemSelected] = React.useState<ProductHit | null>(null);
+  const [addItemQty, setAddItemQty] = React.useState(1);
+  const [addItemLoading, setAddItemLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!addItemOpen) {
+      setAddItemSearch(""); setAddItemMatches([]); setAddItemSelected(null); setAddItemQty(1);
+      return;
+    }
+    const q = addItemSearch.trim();
+    if (q.length < 2) { setAddItemMatches([]); return; }
+    const controller = new AbortController();
+    setAddItemSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/v1/admin/products/search?q=${encodeURIComponent(q)}&limit=6`,
+          { signal: controller.signal },
+        );
+        const json = await res.json();
+        if (res.ok) setAddItemMatches(json.data.products ?? []);
+      } catch { /* user keeps typing */ }
+      finally { if (!controller.signal.aborted) setAddItemSearching(false); }
+    }, 250);
+    return () => { controller.abort(); clearTimeout(t); };
+  }, [addItemSearch, addItemOpen]);
+
+  async function submitAddItem() {
+    if (!addItemSelected) return;
+    setAddItemLoading(true);
+    try {
+      const res = await fetch(`/api/v1/admin/orders/${params.number}/lines`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: addItemSelected.id, quantity: addItemQty }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json?.error?.message ?? "Could not add item"); return; }
+      toast.success(`${addItemSelected.name} added`);
+      setAddItemOpen(false);
+      router.refresh();
+    } catch { toast.error("Network error"); }
+    finally { setAddItemLoading(false); }
+  }
 
   async function submitEditQty() {
     if (!editQtyTarget) return;
@@ -395,11 +452,25 @@ export function OrderDetailClient({ params, order }: PageProps) {
           },
     {
       title: "Mark as shipped",
-      subtitle: isPartiallyPaid ? "blocked" : "ready",
+      subtitle: isPartiallyPaid
+        ? "blocked"
+        : order.status === "shipped" || order.status === "delivered"
+          ? "shipped"
+          : "ready",
       meta: isPartiallyPaid ? "Requires paid in full" : undefined,
+      done: order.status === "shipped" || order.status === "delivered",
+      current:
+        !isPartiallyPaid &&
+        order.status !== "shipped" &&
+        order.status !== "delivered" &&
+        order.status !== "cancelled",
       blocked: isPartiallyPaid,
     },
-    { title: "Delivered" },
+    {
+      title: "Delivered",
+      done: order.status === "delivered",
+      current: order.status === "shipped",
+    },
   ];
 
   return (
@@ -559,7 +630,12 @@ export function OrderDetailClient({ params, order }: PageProps) {
               <Card
                 title="Items"
                 action={
-                  <Button variant="secondary" size="sm">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={order.status === "cancelled" || order.status === "delivered"}
+                    onClick={() => setAddItemOpen(true)}
+                  >
                     <Plus className="size-3.5" /> Add item
                   </Button>
                 }
@@ -634,8 +710,10 @@ export function OrderDetailClient({ params, order }: PageProps) {
                               <DropdownMenuItem
                                 disabled={order.status === "cancelled" || order.status === "delivered"}
                                 onClick={() => {
-                                  setEditQtyTarget(it);
-                                  setEditQtyValue(it.qty);
+                                  setTimeout(() => {
+                                    setEditQtyTarget(it);
+                                    setEditQtyValue(it.qty);
+                                  }, 0);
                                 }}
                               >
                                 <Pencil className="size-3.5" /> Edit quantity
@@ -643,10 +721,23 @@ export function OrderDetailClient({ params, order }: PageProps) {
                               <DropdownMenuItem
                                 destructive
                                 disabled={order.status === "cancelled" || order.status === "delivered" || orderItems.length <= 1}
-                                onClick={() => setRemoveTarget(it)}
+                                onClick={() => {
+                                  setTimeout(() => {
+                                    setRemoveTarget(it);
+                                  }, 0);
+                                }}
                               >
                                 <Trash2 className="size-3.5" /> Remove item
                               </DropdownMenuItem>
+                              {(order.status === "cancelled" || order.status === "delivered") && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <div className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-fg-muted">
+                                    <LockKeyhole className="size-3 flex-shrink-0" />
+                                    Items locked on {order.status} orders
+                                  </div>
+                                </>
+                              )}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </td>
@@ -1030,6 +1121,105 @@ export function OrderDetailClient({ params, order }: PageProps) {
         loading={lineActionLoading}
         onConfirm={submitRemoveLine}
       />
+
+      {/* Add item dialog */}
+      <Dialog open={addItemOpen} onOpenChange={(o) => !addItemLoading && setAddItemOpen(o)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add item</DialogTitle>
+          </DialogHeader>
+
+          {!addItemSelected ? (
+            <div className="flex flex-col gap-3 mt-2">
+              <div className="flex items-center gap-2 px-3 h-10 rounded-md border border-border-strong bg-surface">
+                <Search className="size-4 text-fg-muted flex-shrink-0" />
+                <input
+                  autoFocus
+                  value={addItemSearch}
+                  onChange={(e) => setAddItemSearch(e.target.value)}
+                  placeholder="Search by name, brand or SKU…"
+                  className="flex-1 bg-transparent text-sm text-fg placeholder:text-fg-subtle outline-none"
+                />
+                {addItemSearching && <Loader2 className="size-3.5 animate-spin text-fg-muted flex-shrink-0" />}
+              </div>
+
+              {addItemSearch.trim().length >= 2 && (
+                <div className="rounded-md border border-border overflow-hidden">
+                  {addItemMatches.length === 0 && !addItemSearching ? (
+                    <div className="px-4 py-6 text-center text-sm text-fg-muted">No products found</div>
+                  ) : (
+                    addItemMatches.map((hit) => {
+                      const price = hit.saleActive && hit.saleKobo != null ? hit.saleKobo : hit.priceKobo;
+                      return (
+                        <button
+                          key={hit.id}
+                          type="button"
+                          onClick={() => { setAddItemSelected(hit); setAddItemQty(1); }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-surface-2 border-b border-border last:border-b-0 text-left"
+                        >
+                          <img src={hit.imageUrl} alt="" className="size-10 rounded object-cover flex-shrink-0 bg-surface-2" />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium truncate">{hit.name}</div>
+                            <div className="text-xs text-fg-muted">{hit.brand}</div>
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <div className="text-sm font-semibold tabular">{formatMoney(price)}</div>
+                            <div className={`text-xs ${hit.stock <= 0 ? "text-danger" : "text-fg-muted"}`}>
+                              {hit.stock <= 0 ? "Out of stock" : `${hit.stock} in stock`}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+
+              {addItemSearch.trim().length < 2 && (
+                <p className="text-xs text-fg-subtle text-center py-4">Type at least 2 characters to search</p>
+              )}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-4 mt-2">
+              <div className="flex items-center gap-3 p-3 rounded-md border border-border bg-surface-2">
+                <img src={addItemSelected.imageUrl} alt="" className="size-12 rounded object-cover flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold truncate">{addItemSelected.name}</div>
+                  <div className="text-xs text-fg-muted">{addItemSelected.brand}</div>
+                  <div className="text-sm font-bold tabular mt-0.5">
+                    {formatMoney(addItemSelected.saleActive && addItemSelected.saleKobo != null
+                      ? addItemSelected.saleKobo : addItemSelected.priceKobo)}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAddItemSelected(null)}
+                  className="text-xs text-fg-muted hover:text-fg underline flex-shrink-0"
+                >
+                  Change
+                </button>
+              </div>
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wider text-fg-muted mb-2">Quantity</div>
+                <NumberInput value={addItemQty} onChange={setAddItemQty} min={1} max={999} />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="mt-4">
+            <Button variant="ghost" onClick={() => setAddItemOpen(false)} disabled={addItemLoading}>
+              Cancel
+            </Button>
+            <Button
+              onClick={submitAddItem}
+              disabled={!addItemSelected || addItemLoading}
+            >
+              {addItemLoading && <Loader2 className="size-4 animate-spin" />}
+              Add to order
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
