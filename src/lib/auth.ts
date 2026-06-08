@@ -67,7 +67,8 @@ const adapter = PrismaAdapter(db) as NonNullable<AuthOptions["adapter"]>;
 
 export const authOptions: AuthOptions = {
   adapter,
-  session: { strategy: "jwt", maxAge: 60 * 60 * 12 },
+  // 30 days so the installed staff app stays signed in between shifts.
+  session: { strategy: "jwt", maxAge: 60 * 60 * 24 * 30 },
   ...(env.NEXTAUTH_SECRET ? { secret: env.NEXTAUTH_SECRET } : {}),
   pages: {
     signIn: "/admin-login",
