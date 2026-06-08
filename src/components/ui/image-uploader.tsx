@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Image from "next/image";
-import { Upload, X, GripVertical, Star, AlertCircle, Loader2 } from "lucide-react";
+import { Upload, Camera, X, GripVertical, Star, AlertCircle, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface UploadedImage {
@@ -47,6 +47,7 @@ export function ImageUploader({
   className,
 }: ImageUploaderProps) {
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const cameraRef = React.useRef<HTMLInputElement>(null);
   // Keep latest `images` reachable inside async upload callbacks so we don't
   // overwrite each other when multiple uploads finish near-simultaneously.
   const imagesRef = React.useRef(images);
@@ -56,6 +57,10 @@ export function ImageUploader({
 
   function pick() {
     inputRef.current?.click();
+  }
+
+  function takePhoto() {
+    cameraRef.current?.click();
   }
 
   function patch(id: string, p: Partial<UploadedImage>) {
@@ -226,12 +231,34 @@ export function ImageUploader({
             </span>
           </button>
         )}
+
+        {images.length < max && (
+          <button
+            type="button"
+            onClick={takePhoto}
+            className="aspect-square rounded-md border-2 border-dashed border-border-strong text-fg-muted hover:border-brand-primary hover:text-brand-primary hover:bg-info-bg flex flex-col items-center justify-center gap-1.5"
+          >
+            <Camera className="size-5" />
+            <span className="text-[11px] font-semibold">Take photo</span>
+            <span className="text-[10px] text-fg-subtle">camera</span>
+          </button>
+        )}
       </div>
       <input
         ref={inputRef}
         type="file"
         accept="image/jpeg,image/png,image/webp"
         multiple
+        className="hidden"
+        onChange={handleFiles}
+      />
+      {/* Opens the rear camera directly on mobile; a normal file dialog on
+          desktop. Photos flow through the same upload pipeline. */}
+      <input
+        ref={cameraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
         className="hidden"
         onChange={handleFiles}
       />
