@@ -270,9 +270,9 @@ export default function AdminCreateOrderPage() {
             }
           />
 
-          <div className="grid lg:grid-cols-[1fr_360px] gap-4">
+          <div className="grid lg:grid-cols-[minmax(0,1fr)_360px] gap-4">
             {/* Left — order body */}
-            <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-4 min-w-0">
               {/* Product picker */}
               <Card title="Items">
                 <div className="relative">
