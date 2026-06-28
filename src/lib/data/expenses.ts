@@ -123,10 +123,10 @@ export async function getExpenseSummary(
           createdAt: { gte: range.from, lte: range.to },
         },
         select: {
-          // Net goods revenue = order total (after all discounts) minus shipping
-          // (shipping is pass-through, not goods margin).
+          // Revenue = order total (after discounts, INCLUDING shipping) for
+          // non-cancelled orders — the same basis as the dashboard's revenue,
+          // so the two reconcile for the same period.
           totalKobo: true,
-          shippingKobo: true,
           lines: {
             select: {
               quantity: true,
@@ -147,7 +147,7 @@ export async function getExpenseSummary(
   let revenueKobo = 0;
   let cogsKobo = 0;
   for (const o of orders) {
-    revenueKobo += Number(o.totalKobo) - Number(o.shippingKobo);
+    revenueKobo += Number(o.totalKobo);
     for (const l of o.lines) {
       cogsKobo += Number(l.product?.costPriceKobo ?? 0) * l.quantity;
     }

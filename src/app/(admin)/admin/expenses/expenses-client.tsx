@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Loader2, Trash2, Receipt } from "lucide-react";
+import { Plus, Loader2, Trash2, Receipt, Info } from "lucide-react";
 import { AdminTopBar } from "@/components/admin/topbar";
 import { PageHeader } from "@/components/admin/page-header";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,11 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toaster";
 import { formatMoney } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -209,26 +214,49 @@ export function ExpensesClient({
             }
           />
 
-          {/* P&L summary for the selected period */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
-            <SummaryCard label="Gross profit" value={summary.grossProfitKobo} />
-            <SummaryCard
-              label="Expenses"
-              value={summary.expensesKobo}
-              prefix="−"
+          {/* Profit & loss for the selected period. Each line derives from the
+              one above it, so the path Revenue → Net profit is explicit. */}
+          <div className="rounded-lg border border-border bg-surface p-4 sm:p-5 shadow-sm mb-5 max-w-lg">
+            <div className="text-sm font-bold mb-3">
+              Profit &amp; loss{" "}
+              <span className="font-normal text-fg-muted">· {rangeLabel}</span>
+            </div>
+            <PnlRow
+              label="Revenue"
+              tip="Total sales for this period — every non-cancelled order's total, after discounts and including shipping. Same basis as the dashboard's revenue, so they match for the same period."
+              value={summary.revenueKobo}
+            />
+            <PnlRow
+              label="Cost of goods sold"
+              tip="What the items you sold cost you — quantity sold × each product's cost price (set on the product). Uses the product's current cost price."
+              value={summary.cogsKobo}
+              sign="−"
               tone="muted"
             />
-            <SummaryCard
-              label="Net profit"
-              value={summary.netProfitKobo}
-              tone={netPositive ? "good" : "bad"}
+            <div className="h-px bg-border my-1.5" />
+            <PnlRow
+              label="Gross profit"
+              tip="Revenue minus cost of goods sold — your profit on the products themselves, before running costs."
+              value={summary.grossProfitKobo}
               strong
             />
+            <PnlRow
+              label="Expenses"
+              tip="Operating costs you logged for this period (rent, salaries, utilities…)."
+              value={summary.expensesKobo}
+              sign="−"
+              tone="muted"
+            />
+            <div className="h-px bg-border my-1.5" />
+            <PnlRow
+              label="Net profit"
+              tip="Gross profit minus expenses — your actual profit for the period."
+              value={summary.netProfitKobo}
+              strong
+              big
+              tone={netPositive ? "good" : "bad"}
+            />
           </div>
-          <p className="text-xs text-fg-muted mb-5 -mt-3">
-            {rangeLabel} · gross profit = goods revenue − cost of goods sold;
-            net profit = gross profit − expenses.
-          </p>
 
           {/* Expense list */}
           <div className="rounded-lg border border-border bg-surface shadow-sm">
@@ -453,36 +481,67 @@ export function ExpensesClient({
   );
 }
 
-function SummaryCard({
+/** One line of the P&L statement: label + an info tooltip + the amount.
+ *  `sign` forces a "−" (for the COGS/Expenses deductions); without it the row
+ *  shows its own sign, so a negative gross/net profit reads as a loss. */
+function PnlRow({
   label,
+  tip,
   value,
-  prefix,
+  sign,
   tone = "default",
   strong,
+  big,
 }: {
   label: string;
+  tip: string;
   value: number;
-  prefix?: string;
+  sign?: string;
   tone?: "default" | "good" | "bad" | "muted";
   strong?: boolean;
+  big?: boolean;
 }) {
+  const displaySign = sign ?? (value < 0 ? "−" : "");
   return (
-    <div className="rounded-lg border border-border bg-surface p-4 shadow-sm">
-      <div className="text-[11px] font-bold uppercase tracking-wider text-fg-muted">
-        {label}
+    <div className="flex items-center justify-between gap-3 py-1.5">
+      <div className="flex items-center gap-1.5 min-w-0">
+        <span
+          className={cn(
+            big ? "text-base font-bold" : strong ? "text-sm font-semibold" : "text-sm",
+            tone === "muted" && !big && !strong ? "text-fg-muted" : "text-fg",
+          )}
+        >
+          {label}
+        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="text-fg-subtle hover:text-fg-muted shrink-0"
+              aria-label={`What is ${label}?`}
+            >
+              <Info className="size-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-xs">{tip}</TooltipContent>
+        </Tooltip>
       </div>
-      <div
+      <span
         className={cn(
-          "mt-1 tabular font-bold",
-          strong ? "text-2xl" : "text-xl",
+          "tabular shrink-0",
+          big
+            ? "text-xl font-bold"
+            : strong
+              ? "text-base font-bold"
+              : "text-sm font-semibold",
           tone === "good" && "text-brand-accent",
           tone === "bad" && "text-danger",
           tone === "muted" && "text-fg-muted",
         )}
       >
-        {prefix}
+        {displaySign}
         {formatMoney(Math.abs(value))}
-      </div>
+      </span>
     </div>
   );
 }
