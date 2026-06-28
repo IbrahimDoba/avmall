@@ -27,7 +27,7 @@ const PhoneInput = React.forwardRef<HTMLInputElement, PhoneInputProps>(
         inputMode="numeric"
         autoComplete="tel-national"
         aria-invalid={invalid || undefined}
-        className="flex-1 bg-transparent px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:outline-none tabular"
+        className="flex-1 min-w-0 bg-transparent px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:outline-none tabular"
         placeholder="803 421 7790"
         {...props}
       />
