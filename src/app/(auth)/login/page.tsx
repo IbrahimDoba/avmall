@@ -7,6 +7,7 @@ import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
+import { Label } from "@/components/ui/label";
 import { Alert } from "@/components/ui/alert";
 
 type View = "password" | "code";
@@ -306,24 +307,19 @@ export default function CustomerLoginPage() {
             onChange={(e) => setEmail(e.target.value)}
           />
         </Field>
-        <Field
-          id="password"
-          label={
-            <span className="flex items-center justify-between">
-              <span>Password</span>
-              {!isSignup && (
-                <button
-                  type="button"
-                  onClick={() => goToCode("reset")}
-                  className="text-xs font-semibold text-brand-primary hover:underline"
-                >
-                  Forgot password?
-                </button>
-              )}
-            </span>
-          }
-          {...(isSignup ? { hint: "At least 8 characters" } : {})}
-        >
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <Label htmlFor="password">Password</Label>
+            {!isSignup && (
+              <button
+                type="button"
+                onClick={() => goToCode("reset")}
+                className="text-xs font-semibold text-brand-primary hover:underline"
+              >
+                Forgot password?
+              </button>
+            )}
+          </div>
           <div className="relative">
             <Input
               id="password"
@@ -343,7 +339,10 @@ export default function CustomerLoginPage() {
               {showPassword ? "Hide" : "Show"}
             </button>
           </div>
-        </Field>
+          {isSignup && (
+            <p className="text-xs text-fg-subtle">At least 8 characters</p>
+          )}
+        </div>
 
         <Button
           type="submit"
