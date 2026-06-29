@@ -32,10 +32,20 @@ export async function GET() {
 
     const c = await db.customer.findUnique({
       where: { id: session.customerId },
-      select: { id: true, name: true, phone: true, email: true },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        email: true,
+        emailVerified: true,
+        passwordHash: true,
+      },
     });
     if (!c) throw new UnauthorizedError();
-    return NextResponse.json(apiSuccess({ customer: c }));
+    const { passwordHash, ...rest } = c;
+    return NextResponse.json(
+      apiSuccess({ customer: { ...rest, hasPassword: !!passwordHash } }),
+    );
   } catch (err) {
     return handleApiError(err);
   }

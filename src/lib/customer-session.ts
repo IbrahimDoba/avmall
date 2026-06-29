@@ -285,6 +285,65 @@ export async function resetPasswordWithOtp(
   return { customerId: updated.id };
 }
 
+/**
+ * Confirm the logged-in customer's email with a code sent to it. No-op if
+ * already verified.
+ */
+export async function verifyEmailWithCode(code: string): Promise<void> {
+  const session = await getCustomerSession();
+  if (!session) throw new UnauthorizedError("Sign in first");
+
+  const customer = await db.customer.findUnique({
+    where: { id: session.customerId },
+  });
+  if (!customer) throw new UnauthorizedError("Account not found");
+  if (customer.emailVerified) return;
+  if (!customer.email) {
+    throw new ValidationError({ email: "No email on file to verify" });
+  }
+
+  await consumeOtpCode(customer.email, code);
+  await db.customer.update({
+    where: { id: customer.id },
+    data: { emailVerified: true },
+  });
+}
+
+/**
+ * Change the logged-in customer's password. If they already have one, the
+ * current password must be supplied + correct; OTP-only customers can set one
+ * without it.
+ */
+export async function changePassword(
+  currentPassword: string | undefined,
+  newPassword: string,
+): Promise<void> {
+  if (newPassword.length < PASSWORD_MIN) {
+    throw new ValidationError({ newPassword: `Use at least ${PASSWORD_MIN} characters` });
+  }
+  const session = await getCustomerSession();
+  if (!session) throw new UnauthorizedError("Sign in first");
+
+  const customer = await db.customer.findUnique({
+    where: { id: session.customerId },
+  });
+  if (!customer) throw new UnauthorizedError("Account not found");
+
+  if (customer.passwordHash) {
+    if (
+      !currentPassword ||
+      !(await bcrypt.compare(currentPassword, customer.passwordHash))
+    ) {
+      throw new ValidationError({ currentPassword: "Current password is incorrect" });
+    }
+  }
+
+  await db.customer.update({
+    where: { id: customer.id },
+    data: { passwordHash: await bcrypt.hash(newPassword, 10) },
+  });
+}
+
 export async function setCustomerSession(payload: CustomerSessionPayload): Promise<void> {
   const token = await new SignJWT({ ...payload })
     .setProtectedHeader({ alg: "HS256" })

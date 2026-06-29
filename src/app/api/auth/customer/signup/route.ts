@@ -14,7 +14,7 @@ import { signupWithPassword } from "@/lib/customer-session";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { hasDatabase } from "@/lib/db";
 import { AppError, ValidationError, RateLimitedError } from "@/lib/errors";
-import { rateLimit, clientIp } from "@/lib/rate-limit";
+import { checkRateLimit, clientIp } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
       throw new AppError("DB_NOT_CONFIGURED", "Sign-up requires DATABASE_URL.", 503);
     }
     // Throttle account-creation spam from a single source.
-    const limit = rateLimit(`cust-signup:${clientIp(req)}`, { limit: 6, windowMs: 60_000 });
+    const limit = await checkRateLimit(`cust-signup:${clientIp(req)}`, { limit: 6, windowMs: 60_000 });
     if (!limit.ok) {
       throw new RateLimitedError(`Too many attempts — try again in ${limit.retryAfterSec}s`);
     }

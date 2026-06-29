@@ -142,6 +142,8 @@ model Customer {
   email         String?
   /// bcrypt hash for email+password sign-in. Null for OTP-only customers.
   passwordHash  String?   @map("password_hash")
+  /// True once the customer has confirmed their email with a code.
+  emailVerified Boolean   @default(false) @map("email_verified")
   name          String
   segments      String[]  @default([])
   blacklisted   Boolean   @default(false)

@@ -10,6 +10,7 @@
  */
 
 import { NextRequest } from "next/server";
+import { Redis } from "@upstash/redis";
 
 interface Bucket {
   count: number;
@@ -59,6 +60,45 @@ export function rateLimit(key: string, opts: RateLimitOptions): RateLimitResult 
     remaining: opts.limit - existing.count,
     retryAfterSec: 0,
   };
+}
+
+// ── Distributed limiter (Upstash) ──────────────────────────────────────────
+
+let _redis: Redis | null | undefined;
+
+function getRedis(): Redis | null {
+  if (_redis !== undefined) return _redis;
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  _redis = url && token ? new Redis({ url, token }) : null;
+  return _redis;
+}
+
+/**
+ * Rate limit across ALL serverless instances using Upstash Redis when it's
+ * configured; otherwise falls back to the per-instance in-memory limiter. Use
+ * this (awaited) for anything that needs real protection — login, signup, etc.
+ * Fails open to the in-memory limiter if Redis is unreachable.
+ */
+export async function checkRateLimit(
+  key: string,
+  opts: RateLimitOptions,
+): Promise<RateLimitResult> {
+  const redis = getRedis();
+  if (!redis) return rateLimit(key, opts);
+  try {
+    const windowSec = Math.ceil(opts.windowMs / 1000);
+    const redisKey = `rl:${key}`;
+    const count = await redis.incr(redisKey);
+    if (count === 1) await redis.expire(redisKey, windowSec);
+    if (count > opts.limit) {
+      const ttl = await redis.ttl(redisKey);
+      return { ok: false, remaining: 0, retryAfterSec: ttl > 0 ? ttl : windowSec };
+    }
+    return { ok: true, remaining: opts.limit - count, retryAfterSec: 0 };
+  } catch {
+    return rateLimit(key, opts);
+  }
 }
 
 /**

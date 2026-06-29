@@ -14,7 +14,7 @@ import { loginWithPassword } from "@/lib/customer-session";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { hasDatabase } from "@/lib/db";
 import { AppError, ValidationError, RateLimitedError } from "@/lib/errors";
-import { rateLimit, clientIp } from "@/lib/rate-limit";
+import { checkRateLimit, clientIp } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
       throw new AppError("DB_NOT_CONFIGURED", "Sign-in requires DATABASE_URL.", 503);
     }
     // Throttle brute-force: per-IP (shared networks) + per-email (targeted).
-    const ipLimit = rateLimit(`cust-login-ip:${clientIp(req)}`, { limit: 10, windowMs: 60_000 });
+    const ipLimit = await checkRateLimit(`cust-login-ip:${clientIp(req)}`, { limit: 10, windowMs: 60_000 });
     if (!ipLimit.ok) {
       throw new RateLimitedError(`Too many attempts — try again in ${ipLimit.retryAfterSec}s`);
     }
@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
       });
     }
     const { email, password } = parsed.data;
-    const emailLimit = rateLimit(`cust-login-email:${email.toLowerCase()}`, { limit: 5, windowMs: 60_000 });
+    const emailLimit = await checkRateLimit(`cust-login-email:${email.toLowerCase()}`, { limit: 5, windowMs: 60_000 });
     if (!emailLimit.ok) {
       throw new RateLimitedError(`Too many attempts for this account — try again in ${emailLimit.retryAfterSec}s`);
     }

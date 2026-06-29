@@ -14,7 +14,7 @@ import { resetPasswordWithOtp } from "@/lib/customer-session";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { hasDatabase } from "@/lib/db";
 import { AppError, ValidationError, RateLimitedError } from "@/lib/errors";
-import { rateLimit, clientIp } from "@/lib/rate-limit";
+import { checkRateLimit, clientIp } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
     if (!hasDatabase) {
       throw new AppError("DB_NOT_CONFIGURED", "Password reset requires DATABASE_URL.", 503);
     }
-    const limit = rateLimit(`cust-reset:${clientIp(req)}`, { limit: 8, windowMs: 60_000 });
+    const limit = await checkRateLimit(`cust-reset:${clientIp(req)}`, { limit: 8, windowMs: 60_000 });
     if (!limit.ok) {
       throw new RateLimitedError(`Too many attempts — try again in ${limit.retryAfterSec}s`);
     }

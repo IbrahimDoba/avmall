@@ -18,6 +18,13 @@ export default function ProfilePage() {
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
 
+  // Password section
+  const [hasPassword, setHasPassword] = React.useState(false);
+  const [currentPassword, setCurrentPassword] = React.useState("");
+  const [newPassword, setNewPassword] = React.useState("");
+  const [showPw, setShowPw] = React.useState(false);
+  const [savingPassword, setSavingPassword] = React.useState(false);
+
   React.useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -35,6 +42,7 @@ export default function ProfilePage() {
           setInitialName(c.name ?? "");
           setEmail(c.email ?? "");
           setInitialEmail(c.email ?? "");
+          setHasPassword(!!c.hasPassword);
           // Phone is verified and immutable from this form; we display its
           // national portion only.
           const local = String(c.phone ?? "").replace(/^\+234/, "");
@@ -80,6 +88,35 @@ export default function ProfilePage() {
   function cancel() {
     setName(initialName);
     setEmail(initialEmail);
+  }
+
+  async function savePassword(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingPassword(true);
+    try {
+      const res = await fetch("/api/auth/customer/change-password", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...(hasPassword && { currentPassword }),
+          newPassword,
+        }),
+      });
+      if (res.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message ?? "Couldn't update password");
+      toast.success(hasPassword ? "Password updated" : "Password set");
+      setHasPassword(true);
+      setCurrentPassword("");
+      setNewPassword("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't update password");
+    } finally {
+      setSavingPassword(false);
+    }
   }
 
   const dirty = name !== initialName || email !== initialEmail;
@@ -128,6 +165,68 @@ export default function ProfilePage() {
           </Button>
         </div>
       </form>
+
+      {/* Password */}
+      <div className="max-w-xl mt-10 pt-8 border-t border-border">
+        <h2 className="text-lg font-semibold mb-1">
+          {hasPassword ? "Change password" : "Set a password"}
+        </h2>
+        <p className="text-sm text-fg-muted mb-5">
+          {hasPassword
+            ? "Update the password you use to sign in."
+            : "Add a password so you can sign in without a one-time code."}
+        </p>
+
+        <form onSubmit={savePassword} className="flex flex-col gap-5">
+          {hasPassword && (
+            <Field id="current-password" label="Current password">
+              <Input
+                id="current-password"
+                type={showPw ? "text" : "password"}
+                autoComplete="current-password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                disabled={loading || savingPassword}
+              />
+            </Field>
+          )}
+          <Field id="new-password" label="New password" hint="At least 8 characters">
+            <div className="relative">
+              <Input
+                id="new-password"
+                type={showPw ? "text" : "password"}
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                disabled={loading || savingPassword}
+                className="pr-16"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPw((s) => !s)}
+                tabIndex={-1}
+                className="absolute inset-y-0 right-3 my-auto text-xs font-semibold text-fg-muted hover:text-fg"
+              >
+                {showPw ? "Hide" : "Show"}
+              </button>
+            </div>
+          </Field>
+          <div>
+            <Button
+              type="submit"
+              size="lg"
+              loading={savingPassword}
+              disabled={
+                loading ||
+                newPassword.length < 8 ||
+                (hasPassword && !currentPassword)
+              }
+            >
+              {hasPassword ? "Update password" : "Set password"}
+            </Button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
