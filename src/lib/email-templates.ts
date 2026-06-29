@@ -47,9 +47,8 @@ function layout(opts: {
           <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="560" style="max-width: 560px; background: #ffffff; border-radius: 14px; padding: 32px;">
             <tr>
               <td style="padding-bottom: 24px;">
-                <div style="display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 18px;">
-                  <img src="${SITE.url}/brand/monogram.png" alt="Avmall" width="28" height="28" style="display: inline-block; width: 28px; height: 28px; border-radius: 6px; vertical-align: middle;" />
-                  <span>mall</span>
+                <div style="font-weight: 700; font-size: 20px; line-height: 1; color: #14182b;">
+                  <span style="display: inline-block; width: 30px; height: 30px; line-height: 30px; text-align: center; background: #2a6df4; color: #ffffff; border-radius: 7px; font-weight: 800; font-size: 16px; vertical-align: middle;">A</span><span style="vertical-align: middle; margin-left: 7px;">vmall</span>
                 </div>
               </td>
             </tr>
