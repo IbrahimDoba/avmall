@@ -13,7 +13,8 @@ import { z } from "zod";
 import { loginWithPassword } from "@/lib/customer-session";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { hasDatabase } from "@/lib/db";
-import { AppError, ValidationError } from "@/lib/errors";
+import { AppError, ValidationError, RateLimitedError } from "@/lib/errors";
+import { rateLimit, clientIp } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -27,6 +28,11 @@ export async function POST(req: NextRequest) {
     if (!hasDatabase) {
       throw new AppError("DB_NOT_CONFIGURED", "Sign-in requires DATABASE_URL.", 503);
     }
+    // Throttle brute-force: per-IP (shared networks) + per-email (targeted).
+    const ipLimit = rateLimit(`cust-login-ip:${clientIp(req)}`, { limit: 10, windowMs: 60_000 });
+    if (!ipLimit.ok) {
+      throw new RateLimitedError(`Too many attempts — try again in ${ipLimit.retryAfterSec}s`);
+    }
     const parsed = bodySchema.safeParse(await req.json());
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
@@ -35,6 +41,10 @@ export async function POST(req: NextRequest) {
       });
     }
     const { email, password } = parsed.data;
+    const emailLimit = rateLimit(`cust-login-email:${email.toLowerCase()}`, { limit: 5, windowMs: 60_000 });
+    if (!emailLimit.ok) {
+      throw new RateLimitedError(`Too many attempts for this account — try again in ${emailLimit.retryAfterSec}s`);
+    }
     await loginWithPassword(email, password);
     return NextResponse.json(apiSuccess({ ok: true }));
   } catch (err) {

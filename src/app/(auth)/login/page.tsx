@@ -11,6 +11,7 @@ import { Alert } from "@/components/ui/alert";
 
 type View = "password" | "code";
 type CodeStep = "identify" | "verify";
+type CodePurpose = "login" | "reset";
 
 export default function CustomerLoginPage() {
   const router = useRouter();
@@ -22,8 +23,11 @@ export default function CustomerLoginPage() {
   const [password, setPassword] = React.useState("");
   const [showPassword, setShowPassword] = React.useState(false);
 
+  // Shared OTP flow — used for both code sign-in and password reset.
+  const [codePurpose, setCodePurpose] = React.useState<CodePurpose>("login");
   const [codeStep, setCodeStep] = React.useState<CodeStep>("identify");
   const [otp, setOtp] = React.useState("");
+  const [newPassword, setNewPassword] = React.useState("");
 
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -40,6 +44,8 @@ export default function CustomerLoginPage() {
     setError(null);
     setHint(null);
   }
+
+  const isReset = codePurpose === "reset";
 
   // ── Email + password ──────────────────────────────────────────────────────
   async function submitPassword(e: React.FormEvent) {
@@ -62,7 +68,6 @@ export default function CustomerLoginPage() {
             (isSignup ? "Couldn't create your account" : "Couldn't sign you in"),
         );
       }
-      // New accounts go to the profile to add their name + details.
       router.push(isSignup ? "/account/profile" : "/account");
       router.refresh();
     } catch (err) {
@@ -72,7 +77,7 @@ export default function CustomerLoginPage() {
     }
   }
 
-  // ── One-time code (OTP) ───────────────────────────────────────────────────
+  // ── One-time code (sign-in OR reset) ──────────────────────────────────────
   async function sendCode(e?: React.FormEvent) {
     e?.preventDefault();
     resetFeedback();
@@ -88,6 +93,7 @@ export default function CustomerLoginPage() {
       if (data.data?.mock) setHint("Mock mode (no DB) — use code 123456");
       setCodeStep("verify");
       setOtp("");
+      setNewPassword("");
       setResendIn(60);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -96,15 +102,21 @@ export default function CustomerLoginPage() {
     }
   }
 
-  async function verifyCode(e: React.FormEvent) {
+  async function submitCode(e: React.FormEvent) {
     e.preventDefault();
     resetFeedback();
     setLoading(true);
     try {
-      const res = await fetch("/api/auth/customer/verify", {
+      const endpoint = isReset
+        ? "/api/auth/customer/reset-password"
+        : "/api/auth/customer/verify";
+      const body = isReset
+        ? { identifier: email, code: otp.trim(), newPassword }
+        : { identifier: email, code: otp.trim() };
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ identifier: email, code: otp.trim() }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -120,22 +132,26 @@ export default function CustomerLoginPage() {
     }
   }
 
-  function goToCode() {
+  function goToCode(purpose: CodePurpose) {
     resetFeedback();
+    setCodePurpose(purpose);
     setView("code");
     setCodeStep("identify");
+    setOtp("");
+    setNewPassword("");
   }
   function goToPassword() {
     resetFeedback();
     setView("password");
   }
 
-  // ── Render: OTP verify step ───────────────────────────────────────────────
+  // ── Render: OTP verify step (sign-in or reset) ────────────────────────────
   if (view === "code" && codeStep === "verify") {
+    const canSubmit = otp.length === 6 && (!isReset || newPassword.length >= 8);
     return (
       <div>
         <h1 className="font-display text-3xl font-semibold tracking-tight mb-2">
-          Enter your code
+          {isReset ? "Set a new password" : "Enter your code"}
         </h1>
         <p className="text-sm text-fg-muted mb-7">
           We sent a 6-digit code to{" "}
@@ -149,7 +165,7 @@ export default function CustomerLoginPage() {
           </button>
         </p>
 
-        <form onSubmit={verifyCode}>
+        <form onSubmit={submitCode} className="flex flex-col gap-4">
           <Field id="otp" label="6-digit code">
             <Input
               id="otp"
@@ -165,18 +181,24 @@ export default function CustomerLoginPage() {
             />
           </Field>
 
-          {error && <Alert tone="danger" title={error} className="mt-4" />}
-          {!error && hint && <Alert tone="info" title={hint} className="mt-4" />}
+          {isReset && (
+            <Field id="new-password" label="New password" hint="At least 8 characters">
+              <Input
+                id="new-password"
+                type={showPassword ? "text" : "password"}
+                autoComplete="new-password"
+                placeholder="Create a new password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+              />
+            </Field>
+          )}
 
-          <Button
-            type="submit"
-            size="lg"
-            width="full"
-            className="mt-5"
-            loading={loading}
-            disabled={otp.length < 6}
-          >
-            Verify &amp; sign in
+          {error && <Alert tone="danger" title={error} />}
+          {!error && hint && <Alert tone="info" title={hint} />}
+
+          <Button type="submit" size="lg" width="full" loading={loading} disabled={!canSubmit}>
+            {isReset ? "Reset password & sign in" : "Verify & sign in"}
           </Button>
         </form>
 
@@ -198,15 +220,17 @@ export default function CustomerLoginPage() {
     );
   }
 
-  // ── Render: OTP identify step ─────────────────────────────────────────────
+  // ── Render: OTP identify step (sign-in or reset) ──────────────────────────
   if (view === "code" && codeStep === "identify") {
     return (
       <div>
         <h1 className="font-display text-3xl font-semibold tracking-tight mb-2">
-          Sign in with a code
+          {isReset ? "Reset your password" : "Sign in with a code"}
         </h1>
         <p className="text-sm text-fg-muted mb-7">
-          We&apos;ll email you a 6-digit code — no password needed.
+          {isReset
+            ? "Enter your email and we'll send a code to set a new password."
+            : "We'll email you a 6-digit code — no password needed."}
         </p>
 
         {error && <Alert tone="danger" title={error} className="mb-4" />}
@@ -241,7 +265,7 @@ export default function CustomerLoginPage() {
             onClick={goToPassword}
             className="text-brand-primary font-semibold hover:underline"
           >
-            ← Use email &amp; password instead
+            ← Back to email &amp; password
           </button>
         </p>
       </div>
@@ -284,7 +308,20 @@ export default function CustomerLoginPage() {
         </Field>
         <Field
           id="password"
-          label="Password"
+          label={
+            <span className="flex items-center justify-between">
+              <span>Password</span>
+              {!isSignup && (
+                <button
+                  type="button"
+                  onClick={() => goToCode("reset")}
+                  className="text-xs font-semibold text-brand-primary hover:underline"
+                >
+                  Forgot password?
+                </button>
+              )}
+            </span>
+          }
           {...(isSignup ? { hint: "At least 8 characters" } : {})}
         >
           <div className="relative">
@@ -339,7 +376,7 @@ export default function CustomerLoginPage() {
         <div className="h-px flex-1 bg-border" />
       </div>
 
-      <Button variant="secondary" width="full" onClick={goToCode}>
+      <Button variant="secondary" width="full" onClick={() => goToCode("login")}>
         Email me a one-time code
       </Button>
 

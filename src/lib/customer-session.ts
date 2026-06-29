@@ -94,21 +94,18 @@ export async function startOtp(rawIdentifier: string): Promise<{
 }
 
 /**
- * Verify a code against the most recent active OTP for this identifier. On
- * success, find-or-create the Customer and set a signed session cookie.
+ * Verify the latest active OTP for an identifier and consume it (so it can't
+ * be replayed). Throws on missing / expired / wrong / too-many-attempts.
+ * Shared by OTP sign-in and password reset.
  */
-export async function verifyOtpAndStartSession(
+async function consumeOtpCode(
   rawIdentifier: string,
   code: string,
-): Promise<{ customerId: string; isNew: boolean }> {
+): Promise<{ kind: "phone" | "email"; value: string }> {
   const { kind, value } = normalizeIdentifier(rawIdentifier);
 
   const otp = await db.otpCode.findFirst({
-    where: {
-      identifier: value,
-      consumedAt: null,
-      expiresAt: { gt: new Date() },
-    },
+    where: { identifier: value, consumedAt: null, expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "desc" },
   });
   if (!otp) throw new UnauthorizedError("Code expired or not found — request a new one");
@@ -126,11 +123,23 @@ export async function verifyOtpAndStartSession(
     throw new UnauthorizedError("Incorrect code");
   }
 
-  // Consume the code so it can't be replayed.
   await db.otpCode.update({
     where: { id: otp.id },
     data: { consumedAt: new Date() },
   });
+
+  return { kind, value };
+}
+
+/**
+ * Verify a code against the most recent active OTP for this identifier. On
+ * success, find-or-create the Customer and set a signed session cookie.
+ */
+export async function verifyOtpAndStartSession(
+  rawIdentifier: string,
+  code: string,
+): Promise<{ customerId: string; isNew: boolean }> {
+  const { kind, value } = await consumeOtpCode(rawIdentifier, code);
 
   // Find-or-create the customer within the storefront's active store
   // (customers are per-store).
@@ -240,6 +249,40 @@ export async function loginWithPassword(
 
   await setCustomerSession({ customerId: customer.id, phone: customer.phone });
   return { customerId: customer.id };
+}
+
+/**
+ * Reset a customer's password using an OTP they received by email (the "forgot
+ * password" flow). Verifies + consumes the code, sets the new password, and
+ * starts a session. The account must already exist.
+ */
+export async function resetPasswordWithOtp(
+  rawIdentifier: string,
+  code: string,
+  newPassword: string,
+): Promise<{ customerId: string }> {
+  if (newPassword.length < PASSWORD_MIN) {
+    throw new ValidationError({ password: `Use at least ${PASSWORD_MIN} characters` });
+  }
+
+  const { kind, value } = await consumeOtpCode(rawIdentifier, code);
+
+  const storeId = await getStorefrontStoreId();
+  if (!storeId) throw new UnauthorizedError("No store available");
+
+  const customer = await db.customer.findFirst({
+    where: { storeId, ...(kind === "phone" ? { phone: value } : { email: value }) },
+  });
+  if (!customer) {
+    throw new UnauthorizedError("No account found for that email");
+  }
+
+  const updated = await db.customer.update({
+    where: { id: customer.id },
+    data: { passwordHash: await bcrypt.hash(newPassword, 10) },
+  });
+  await setCustomerSession({ customerId: updated.id, phone: updated.phone });
+  return { customerId: updated.id };
 }
 
 export async function setCustomerSession(payload: CustomerSessionPayload): Promise<void> {
