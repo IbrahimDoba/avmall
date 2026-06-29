@@ -87,7 +87,7 @@ export const CurrencyInput = React.forwardRef<HTMLInputElement, CurrencyInputPro
           onChange={handleChange}
           onFocus={() => setFocused(true)}
           onBlur={handleBlur}
-          className="flex-1 bg-transparent px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:outline-none tabular text-right"
+          className="flex-1 min-w-0 bg-transparent px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus:outline-none tabular text-right"
         />
       </div>
     );

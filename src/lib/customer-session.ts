@@ -22,8 +22,12 @@ import bcrypt from "bcryptjs";
 import { db } from "./db";
 import { getStorefrontStoreId } from "./store";
 import { env } from "./env";
-import { normaliseNigerianPhone, isValidNigerianPhone } from "./phone";
-import { UnauthorizedError, ValidationError, RateLimitedError } from "./errors";
+import {
+  normaliseNigerianPhone,
+  isValidNigerianPhone,
+  PENDING_PHONE_PREFIX,
+} from "./phone";
+import { AppError, UnauthorizedError, ValidationError, RateLimitedError } from "./errors";
 
 const COOKIE_NAME = "av_session";
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
@@ -94,21 +98,18 @@ export async function startOtp(rawIdentifier: string): Promise<{
 }
 
 /**
- * Verify a code against the most recent active OTP for this identifier. On
- * success, find-or-create the Customer and set a signed session cookie.
+ * Verify the latest active OTP for an identifier and consume it (so it can't
+ * be replayed). Throws on missing / expired / wrong / too-many-attempts.
+ * Shared by OTP sign-in and password reset.
  */
-export async function verifyOtpAndStartSession(
+async function consumeOtpCode(
   rawIdentifier: string,
   code: string,
-): Promise<{ customerId: string; isNew: boolean }> {
+): Promise<{ kind: "phone" | "email"; value: string }> {
   const { kind, value } = normalizeIdentifier(rawIdentifier);
 
   const otp = await db.otpCode.findFirst({
-    where: {
-      identifier: value,
-      consumedAt: null,
-      expiresAt: { gt: new Date() },
-    },
+    where: { identifier: value, consumedAt: null, expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "desc" },
   });
   if (!otp) throw new UnauthorizedError("Code expired or not found — request a new one");
@@ -126,11 +127,23 @@ export async function verifyOtpAndStartSession(
     throw new UnauthorizedError("Incorrect code");
   }
 
-  // Consume the code so it can't be replayed.
   await db.otpCode.update({
     where: { id: otp.id },
     data: { consumedAt: new Date() },
   });
+
+  return { kind, value };
+}
+
+/**
+ * Verify a code against the most recent active OTP for this identifier. On
+ * success, find-or-create the Customer and set a signed session cookie.
+ */
+export async function verifyOtpAndStartSession(
+  rawIdentifier: string,
+  code: string,
+): Promise<{ customerId: string; isNew: boolean }> {
+  const { kind, value } = await consumeOtpCode(rawIdentifier, code);
 
   // Find-or-create the customer within the storefront's active store
   // (customers are per-store).
@@ -147,7 +160,7 @@ export async function verifyOtpAndStartSession(
     customer = await db.customer.create({
       data: {
         storeId,
-        phone: kind === "phone" ? value : `+pending-${Date.now()}`,
+        phone: kind === "phone" ? value : `${PENDING_PHONE_PREFIX}${Date.now()}`,
         email: kind === "email" ? value : null,
         name: kind === "email" ? value.split("@")[0]! : "Customer",
       },
@@ -158,6 +171,181 @@ export async function verifyOtpAndStartSession(
   await setCustomerSession({ customerId: customer.id, phone: customer.phone });
 
   return { customerId: customer.id, isNew };
+}
+
+const PASSWORD_MIN = 8;
+
+/**
+ * Create (or password-enable) a customer with email + password, then start a
+ * session. If the email already has a password it's a conflict — sign in
+ * instead. An OTP-only customer with this email gets the password linked,
+ * keeping their existing orders/data.
+ */
+export async function signupWithPassword(
+  rawEmail: string,
+  password: string,
+  name?: string,
+): Promise<{ customerId: string }> {
+  const email = rawEmail.trim().toLowerCase();
+  if (!email.includes("@")) {
+    throw new ValidationError({ email: "Enter a valid email address" });
+  }
+  if (password.length < PASSWORD_MIN) {
+    throw new ValidationError({ password: `Use at least ${PASSWORD_MIN} characters` });
+  }
+
+  const storeId = await getStorefrontStoreId();
+  if (!storeId) throw new UnauthorizedError("No store available");
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  const trimmedName = name?.trim();
+
+  const existing = await db.customer.findFirst({ where: { storeId, email } });
+  if (existing) {
+    if (existing.passwordHash) {
+      throw new AppError(
+        "EMAIL_EXISTS",
+        "An account with this email already exists — please sign in.",
+        409,
+      );
+    }
+    const updated = await db.customer.update({
+      where: { id: existing.id },
+      data: { passwordHash, ...(trimmedName && { name: trimmedName }) },
+    });
+    await setCustomerSession({ customerId: updated.id, phone: updated.phone });
+    return { customerId: updated.id };
+  }
+
+  const customer = await db.customer.create({
+    data: {
+      storeId,
+      email,
+      // Placeholder until the customer adds a real number (phone is the other
+      // unique key); mirrors the OTP-by-email path.
+      phone: `${PENDING_PHONE_PREFIX}${Date.now()}`,
+      name: trimmedName || email.split("@")[0]!,
+      passwordHash,
+    },
+  });
+  await setCustomerSession({ customerId: customer.id, phone: customer.phone });
+  return { customerId: customer.id };
+}
+
+/** Verify an email + password and start a session. */
+export async function loginWithPassword(
+  rawEmail: string,
+  password: string,
+): Promise<{ customerId: string }> {
+  const email = rawEmail.trim().toLowerCase();
+  const storeId = await getStorefrontStoreId();
+  if (!storeId) throw new UnauthorizedError("No store available");
+
+  const customer = await db.customer.findFirst({ where: { storeId, email } });
+  // Identical message for "no such email" and "wrong password" so we never
+  // leak which emails have accounts.
+  if (
+    !customer?.passwordHash ||
+    !(await bcrypt.compare(password, customer.passwordHash))
+  ) {
+    throw new UnauthorizedError("Incorrect email or password");
+  }
+
+  await setCustomerSession({ customerId: customer.id, phone: customer.phone });
+  return { customerId: customer.id };
+}
+
+/**
+ * Reset a customer's password using an OTP they received by email (the "forgot
+ * password" flow). Verifies + consumes the code, sets the new password, and
+ * starts a session. The account must already exist.
+ */
+export async function resetPasswordWithOtp(
+  rawIdentifier: string,
+  code: string,
+  newPassword: string,
+): Promise<{ customerId: string }> {
+  if (newPassword.length < PASSWORD_MIN) {
+    throw new ValidationError({ password: `Use at least ${PASSWORD_MIN} characters` });
+  }
+
+  const { kind, value } = await consumeOtpCode(rawIdentifier, code);
+
+  const storeId = await getStorefrontStoreId();
+  if (!storeId) throw new UnauthorizedError("No store available");
+
+  const customer = await db.customer.findFirst({
+    where: { storeId, ...(kind === "phone" ? { phone: value } : { email: value }) },
+  });
+  if (!customer) {
+    throw new UnauthorizedError("No account found for that email");
+  }
+
+  const updated = await db.customer.update({
+    where: { id: customer.id },
+    data: { passwordHash: await bcrypt.hash(newPassword, 10) },
+  });
+  await setCustomerSession({ customerId: updated.id, phone: updated.phone });
+  return { customerId: updated.id };
+}
+
+/**
+ * Confirm the logged-in customer's email with a code sent to it. No-op if
+ * already verified.
+ */
+export async function verifyEmailWithCode(code: string): Promise<void> {
+  const session = await getCustomerSession();
+  if (!session) throw new UnauthorizedError("Sign in first");
+
+  const customer = await db.customer.findUnique({
+    where: { id: session.customerId },
+  });
+  if (!customer) throw new UnauthorizedError("Account not found");
+  if (customer.emailVerified) return;
+  if (!customer.email) {
+    throw new ValidationError({ email: "No email on file to verify" });
+  }
+
+  await consumeOtpCode(customer.email, code);
+  await db.customer.update({
+    where: { id: customer.id },
+    data: { emailVerified: true },
+  });
+}
+
+/**
+ * Change the logged-in customer's password. If they already have one, the
+ * current password must be supplied + correct; OTP-only customers can set one
+ * without it.
+ */
+export async function changePassword(
+  currentPassword: string | undefined,
+  newPassword: string,
+): Promise<void> {
+  if (newPassword.length < PASSWORD_MIN) {
+    throw new ValidationError({ newPassword: `Use at least ${PASSWORD_MIN} characters` });
+  }
+  const session = await getCustomerSession();
+  if (!session) throw new UnauthorizedError("Sign in first");
+
+  const customer = await db.customer.findUnique({
+    where: { id: session.customerId },
+  });
+  if (!customer) throw new UnauthorizedError("Account not found");
+
+  if (customer.passwordHash) {
+    if (
+      !currentPassword ||
+      !(await bcrypt.compare(currentPassword, customer.passwordHash))
+    ) {
+      throw new ValidationError({ currentPassword: "Current password is incorrect" });
+    }
+  }
+
+  await db.customer.update({
+    where: { id: customer.id },
+    data: { passwordHash: await bcrypt.hash(newPassword, 10) },
+  });
 }
 
 export async function setCustomerSession(payload: CustomerSessionPayload): Promise<void> {
