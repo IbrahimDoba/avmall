@@ -22,13 +22,14 @@
  *
  * Response:
  *   {
+ *     negotiable: boolean,         // false = fixed-price / negotiation off — AI must NOT invent a discount
  *     acceptable: boolean,
  *     settlePriceKobo?: number,    // price to ACTUALLY charge when acceptable — never above baseline
- *     counterOfferKobo?: number,   // only when !acceptable
- *     floorKobo: number,           // INTERNAL — do not surface to customer
+ *     counterOfferKobo?: number,   // only when negotiable && !acceptable
+ *     floorKobo?: number,          // INTERNAL, only when negotiable — do not surface to customer
  *     baselineKobo: number,        // current retail/sale price the offer is against
  *     savingsKobo?: number,        // how much the customer saved (when acceptable)
- *     messageHint: string,         // phrasing the AI should adapt
+ *     messageHint: string,         // phrasing the AI should adapt — never invent prices/products
  *     reason: string,              // why this verdict — internal only
  *   }
  *
@@ -45,7 +46,7 @@ import { db, hasDatabase } from "@/lib/db";
 import { requireAiAgent } from "@/lib/ai-auth";
 import { applyPercentageDiscount, formatMoney } from "@/lib/money";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
-import { AppError, ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
+import { AppError, NotFoundError, ValidationError } from "@/lib/errors";
 
 export const runtime = "nodejs";
 
@@ -88,20 +89,40 @@ export async function POST(req: NextRequest) {
     });
     if (!product) throw new NotFoundError(`Product ${productSlug}`);
 
+    const baselineKobo = Number(
+      product.saleActive && product.saleKobo != null ? product.saleKobo : product.priceKobo,
+    );
+
+    // Not open to negotiation → return a STRUCTURED refusal (HTTP 200), not an
+    // error. A tool that returns an error status invites the LLM to improvise an
+    // answer — that's how the fake "iPhone 16 accepted" happened. A clear
+    // negotiable:false result with a strict script keeps the agent grounded.
     if (!product.negotiate) {
-      throw new ConflictError("This product is not open to negotiation");
+      return NextResponse.json(
+        apiSuccess({
+          negotiable: false,
+          acceptable: false,
+          baselineKobo,
+          messageHint: `This item is sold at a fixed price of ${formatMoney(baselineKobo)} and cannot be discounted. Politely tell the customer the price is fixed. Do NOT invent a discount, a lower price, or a different product.`,
+          reason: "product.negotiate = false",
+        }),
+      );
     }
 
     // Master kill-switch from AiSettings (defaults to enabled).
     const ai = await db.aiSettings.findUnique({ where: { key: "default" } });
     const negotiationEnabled = ai?.negotiationEnabled ?? true;
     if (!negotiationEnabled) {
-      throw new ConflictError("Negotiation is globally disabled — escalate to staff");
+      return NextResponse.json(
+        apiSuccess({
+          negotiable: false,
+          acceptable: false,
+          baselineKobo,
+          messageHint: `Price negotiation is currently turned off. Tell the customer the price is ${formatMoney(baselineKobo)} and offer to connect them with a staff member. Do NOT invent a discount or price.`,
+          reason: "AiSettings.negotiationEnabled = false",
+        }),
+      );
     }
-
-    const baselineKobo = Number(
-      product.saleActive && product.saleKobo != null ? product.saleKobo : product.priceKobo,
-    );
 
     // Resolve the floor: explicit per-product, then per-product %, then AiSettings %.
     let floorKobo: number;
@@ -125,6 +146,7 @@ export async function POST(req: NextRequest) {
       // (e.g. a ₦7,000,000 "offer" on an ₦85,000 phone).
       return NextResponse.json(
         apiSuccess({
+          negotiable: true,
           acceptable: true,
           settlePriceKobo: baselineKobo,
           floorKobo,
@@ -140,6 +162,7 @@ export async function POST(req: NextRequest) {
       const savings = baselineKobo - offerKobo;
       return NextResponse.json(
         apiSuccess({
+          negotiable: true,
           acceptable: true,
           settlePriceKobo: offerKobo,
           floorKobo,
@@ -154,6 +177,7 @@ export async function POST(req: NextRequest) {
     // Below the floor — counter at exactly the floor, framed warmly.
     return NextResponse.json(
       apiSuccess({
+        negotiable: true,
         acceptable: false,
         counterOfferKobo: floorKobo,
         floorKobo,
