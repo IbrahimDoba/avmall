@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchProducts, listProducts } from "@/lib/data/products";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
+import { formatMoney } from "@/lib/money";
 
 export const runtime = "nodejs";
 
@@ -36,8 +37,12 @@ export async function GET(req: NextRequest) {
         name: p.name,
         brand: p.brand,
         category: p.category,
-        priceKobo: p.priceKobo,
-        saleKobo: p.saleActive ? p.saleKobo : null,
+        // Human-readable Naira — the LLM must never see raw kobo (it reports
+        // it as Naira → 100× inflated "millions"). Currency is always NGN.
+        price: formatMoney(Number(p.priceKobo)),
+        ...(p.saleActive && p.saleKobo != null && {
+          salePrice: formatMoney(Number(p.saleKobo)),
+        }),
         inStock: p.stock > 0,
         stock: p.stock,
         imageUrl: p.imageUrl,
@@ -54,8 +59,10 @@ export async function GET(req: NextRequest) {
         name: p.name,
         brand: p.brand,
         category: p.category,
-        priceKobo: p.price,
-        saleKobo: p.saleActive && p.sale != null ? p.sale : null,
+        price: formatMoney(p.price),
+        ...(p.saleActive && p.sale != null && {
+          salePrice: formatMoney(p.sale),
+        }),
         inStock: p.stock > 0,
         stock: p.stock,
         imageUrl: p.imageUrl,

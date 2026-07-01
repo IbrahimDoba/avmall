@@ -10,8 +10,9 @@
  *   2. Per-product `negotiateMaxPct`     (% off retail)
  *   3. AiSettings global `globalNegotiateMaxPct` (% off retail, site-wide)
  *
- * The `floorKobo` value is INTERNAL — it must never appear in the AI's
- * reply to the customer. Use `messageHint` to phrase the response.
+ * The negotiation floor is INTERNAL — it is never included in the response
+ * (only `counterOffer`, which equals the floor, is surfaced). Use
+ * `messageHint` to phrase the reply.
  *
  * Body:
  *   {
@@ -20,17 +21,18 @@
  *     quantity?: number,         // default 1; only affects retail base when sale priced
  *   }
  *
- * Response:
+ * Response — all money is a ready-to-say Naira string (e.g. "₦12,500"), never
+ * raw kobo (an LLM reads kobo as Naira and inflates prices 100×):
  *   {
- *     negotiable: boolean,         // false = fixed-price / negotiation off — AI must NOT invent a discount
+ *     negotiable: boolean,     // false = fixed-price / negotiation off — AI must NOT invent a discount
  *     acceptable: boolean,
- *     settlePriceKobo?: number,    // price to ACTUALLY charge when acceptable — never above baseline
- *     counterOfferKobo?: number,   // only when negotiable && !acceptable
- *     floorKobo?: number,          // INTERNAL, only when negotiable — do not surface to customer
- *     baselineKobo: number,        // current retail/sale price the offer is against
- *     savingsKobo?: number,        // how much the customer saved (when acceptable)
- *     messageHint: string,         // phrasing the AI should adapt — never invent prices/products
- *     reason: string,              // why this verdict — internal only
+ *     currency: "NGN",
+ *     price: string,           // current retail/sale price the offer is against
+ *     settlePrice?: string,    // price to ACTUALLY charge when acceptable — never above price
+ *     counterOffer?: string,   // only when negotiable && !acceptable (equals the internal floor)
+ *     savings?: string,        // how much the customer saved (when acceptable)
+ *     messageHint: string,     // phrasing the AI should adapt — never invent prices/products
+ *     reason: string,          // why this verdict — internal only
  *   }
  *
  * Negotiation only ever moves the price DOWN. The settle price is clamped to
@@ -101,7 +103,8 @@ export async function POST(req: NextRequest) {
         apiSuccess({
           negotiable: false,
           acceptable: false,
-          baselineKobo,
+          currency: "NGN",
+          price: formatMoney(baselineKobo),
           messageHint: `This item is sold at a fixed price of ${formatMoney(baselineKobo)} and cannot be discounted. Politely tell the customer the price is fixed. Do NOT invent a discount, a lower price, or a different product.`,
           reason: "product.negotiate = false",
         }),
@@ -116,7 +119,8 @@ export async function POST(req: NextRequest) {
         apiSuccess({
           negotiable: false,
           acceptable: false,
-          baselineKobo,
+          currency: "NGN",
+          price: formatMoney(baselineKobo),
           messageHint: `Price negotiation is currently turned off. Tell the customer the price is ${formatMoney(baselineKobo)} and offer to connect them with a staff member. Do NOT invent a discount or price.`,
           reason: "AiSettings.negotiationEnabled = false",
         }),
@@ -147,10 +151,10 @@ export async function POST(req: NextRequest) {
         apiSuccess({
           negotiable: true,
           acceptable: true,
-          settlePriceKobo: baselineKobo,
-          floorKobo,
-          baselineKobo,
-          savingsKobo: 0,
+          currency: "NGN",
+          settlePrice: formatMoney(baselineKobo),
+          price: formatMoney(baselineKobo),
+          savings: formatMoney(0),
           messageHint: `The customer offered at or above our price. Do NOT charge more than retail — confirm the order at our normal price of ${formatMoney(baselineKobo)}.`,
           reason: `offer ≥ baseline — clamped to baseline (offer ${formatMoney(offerKobo)}, baseline ${formatMoney(baselineKobo)})`,
         }),
@@ -163,10 +167,10 @@ export async function POST(req: NextRequest) {
         apiSuccess({
           negotiable: true,
           acceptable: true,
-          settlePriceKobo: offerKobo,
-          floorKobo,
-          baselineKobo,
-          savingsKobo: savings,
+          currency: "NGN",
+          settlePrice: formatMoney(offerKobo),
+          price: formatMoney(baselineKobo),
+          savings: formatMoney(savings),
           messageHint: `Accept the offer. Tell the customer we can do ${formatMoney(offerKobo)} — that's a saving of ${formatMoney(savings)} off the regular price. Do not mention the floor.`,
           reason: `offer ≥ floor (basis: ${floorBasis})`,
         }),
@@ -178,9 +182,9 @@ export async function POST(req: NextRequest) {
       apiSuccess({
         negotiable: true,
         acceptable: false,
-        counterOfferKobo: floorKobo,
-        floorKobo,
-        baselineKobo,
+        currency: "NGN",
+        counterOffer: formatMoney(floorKobo),
+        price: formatMoney(baselineKobo),
         messageHint: `Counter with ${formatMoney(floorKobo)}. Frame it as the best you can do today. Never reveal that the offer was below a floor. If the customer pushes again, offer to escalate to a human (handoff).`,
         reason: `offer < floor (basis: ${floorBasis})`,
       }),
