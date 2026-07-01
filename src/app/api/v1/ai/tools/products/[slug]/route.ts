@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getProductBySlug } from "@/lib/data/products";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { NotFoundError } from "@/lib/errors";
+import { formatMoney } from "@/lib/money";
 
 export const runtime = "nodejs";
 
@@ -36,8 +37,14 @@ export async function GET(
         category: p.category,
         shortDescription: p.short,
         imageUrl: p.imageUrl,
-        priceKobo: p.price,
-        saleKobo: p.saleActive && p.sale != null ? p.sale : null,
+        // Human-readable Naira ONLY — never expose raw kobo to the LLM, or it
+        // states kobo as Naira (₦12,500 → "₦1,250,000"). Currency is NGN.
+        currency: "NGN",
+        price: formatMoney(p.price),
+        ...(p.saleActive && p.sale != null && {
+          salePrice: formatMoney(p.sale),
+          discount: formatMoney(p.price - p.sale),
+        }),
         inStock: p.stock > 0,
         stock: p.stock,
         // Variant matrix (size × colour). Hidden when there's only a default
@@ -48,16 +55,18 @@ export async function GET(
           id: v.id,
           label: v.label,
           stock: v.stock,
-          ...(v.price != null && { priceKobo: v.price }),
+          ...(v.price != null && { price: formatMoney(v.price) }),
           ...(v.option1Value && { option1Value: v.option1Value }),
           ...(v.option2Value && { option2Value: v.option2Value }),
         })),
-        // Bulk pricing tiers — the agent can quote these directly.
+        // Bulk pricing tiers — the agent can quote these directly. Percentage
+        // tiers read as "X% off"; fixed tiers as a per-unit Naira price.
         bulkTiers: p.bulk.map((t) => ({
           min: t.min,
           max: t.max,
-          type: t.type,
-          value: t.value,
+          ...(t.type === "percentage"
+            ? { discount: `${t.value}% off` }
+            : { pricePerUnit: formatMoney(t.value) }),
         })),
         negotiable: !!p.negotiate,
         preorder: !!p.preorder,
