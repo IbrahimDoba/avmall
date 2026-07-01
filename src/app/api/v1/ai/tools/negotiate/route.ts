@@ -22,14 +22,20 @@
  *
  * Response:
  *   {
+ *     negotiable: boolean,         // false = fixed-price / negotiation off — AI must NOT invent a discount
  *     acceptable: boolean,
- *     counterOfferKobo?: number,   // only when !acceptable
- *     floorKobo: number,           // INTERNAL — do not surface to customer
+ *     settlePriceKobo?: number,    // price to ACTUALLY charge when acceptable — never above baseline
+ *     counterOfferKobo?: number,   // only when negotiable && !acceptable
+ *     floorKobo?: number,          // INTERNAL, only when negotiable — do not surface to customer
  *     baselineKobo: number,        // current retail/sale price the offer is against
  *     savingsKobo?: number,        // how much the customer saved (when acceptable)
- *     messageHint: string,         // phrasing the AI should adapt
+ *     messageHint: string,         // phrasing the AI should adapt — never invent prices/products
  *     reason: string,              // why this verdict — internal only
  *   }
+ *
+ * Negotiation only ever moves the price DOWN. The settle price is clamped to
+ * [floor, baseline] — an offer at or above retail is confirmed at retail, never
+ * at the (possibly inflated or garbled) offered amount.
  *
  * Auth: Bearer AI_AGENT_TOKEN
  */
@@ -38,9 +44,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { db, hasDatabase } from "@/lib/db";
 import { requireAiAgent } from "@/lib/ai-auth";
-import { applyPercentageDiscount } from "@/lib/money";
+import { applyPercentageDiscount, formatMoney } from "@/lib/money";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
-import { AppError, ConflictError, NotFoundError, ValidationError } from "@/lib/errors";
+import { AppError, NotFoundError, ValidationError } from "@/lib/errors";
 
 export const runtime = "nodejs";
 
@@ -83,20 +89,40 @@ export async function POST(req: NextRequest) {
     });
     if (!product) throw new NotFoundError(`Product ${productSlug}`);
 
+    const baselineKobo = Number(
+      product.saleActive && product.saleKobo != null ? product.saleKobo : product.priceKobo,
+    );
+
+    // Not open to negotiation → return a STRUCTURED refusal (HTTP 200), not an
+    // error. A tool that returns an error status invites the LLM to improvise an
+    // answer — that's how the fake "iPhone 16 accepted" happened. A clear
+    // negotiable:false result with a strict script keeps the agent grounded.
     if (!product.negotiate) {
-      throw new ConflictError("This product is not open to negotiation");
+      return NextResponse.json(
+        apiSuccess({
+          negotiable: false,
+          acceptable: false,
+          baselineKobo,
+          messageHint: `This item is sold at a fixed price of ${formatMoney(baselineKobo)} and cannot be discounted. Politely tell the customer the price is fixed. Do NOT invent a discount, a lower price, or a different product.`,
+          reason: "product.negotiate = false",
+        }),
+      );
     }
 
     // Master kill-switch from AiSettings (defaults to enabled).
     const ai = await db.aiSettings.findUnique({ where: { key: "default" } });
     const negotiationEnabled = ai?.negotiationEnabled ?? true;
     if (!negotiationEnabled) {
-      throw new ConflictError("Negotiation is globally disabled — escalate to staff");
+      return NextResponse.json(
+        apiSuccess({
+          negotiable: false,
+          acceptable: false,
+          baselineKobo,
+          messageHint: `Price negotiation is currently turned off. Tell the customer the price is ${formatMoney(baselineKobo)} and offer to connect them with a staff member. Do NOT invent a discount or price.`,
+          reason: "AiSettings.negotiationEnabled = false",
+        }),
+      );
     }
-
-    const baselineKobo = Number(
-      product.saleActive && product.saleKobo != null ? product.saleKobo : product.priceKobo,
-    );
 
     // Resolve the floor: explicit per-product, then per-product %, then AiSettings %.
     let floorKobo: number;
@@ -114,16 +140,20 @@ export async function POST(req: NextRequest) {
     }
 
     if (offerKobo >= baselineKobo) {
-      // Customer is offering ≥ retail. Accept happily — no counter needed.
+      // At or above retail. We NEVER charge above the list price — clamp the
+      // settle price to baseline and confirm at our normal price. This guards
+      // against an inflated or unit-garbled offer being billed as-is
+      // (e.g. a ₦7,000,000 "offer" on an ₦85,000 phone).
       return NextResponse.json(
         apiSuccess({
+          negotiable: true,
           acceptable: true,
+          settlePriceKobo: baselineKobo,
           floorKobo,
           baselineKobo,
           savingsKobo: 0,
-          messageHint:
-            "Customer offered at or above retail — confirm the order at the offered price.",
-          reason: `offer ≥ baseline (₦${offerKobo / 100} ≥ ₦${baselineKobo / 100})`,
+          messageHint: `The customer offered at or above our price. Do NOT charge more than retail — confirm the order at our normal price of ${formatMoney(baselineKobo)}.`,
+          reason: `offer ≥ baseline — clamped to baseline (offer ${formatMoney(offerKobo)}, baseline ${formatMoney(baselineKobo)})`,
         }),
       );
     }
@@ -132,11 +162,13 @@ export async function POST(req: NextRequest) {
       const savings = baselineKobo - offerKobo;
       return NextResponse.json(
         apiSuccess({
+          negotiable: true,
           acceptable: true,
+          settlePriceKobo: offerKobo,
           floorKobo,
           baselineKobo,
           savingsKobo: savings,
-          messageHint: `Accept the offer. Tell the customer we can do ₦${(offerKobo / 100).toLocaleString("en-NG")} — that's a saving of ₦${(savings / 100).toLocaleString("en-NG")} off the regular price. Do not mention the floor.`,
+          messageHint: `Accept the offer. Tell the customer we can do ${formatMoney(offerKobo)} — that's a saving of ${formatMoney(savings)} off the regular price. Do not mention the floor.`,
           reason: `offer ≥ floor (basis: ${floorBasis})`,
         }),
       );
@@ -145,11 +177,12 @@ export async function POST(req: NextRequest) {
     // Below the floor — counter at exactly the floor, framed warmly.
     return NextResponse.json(
       apiSuccess({
+        negotiable: true,
         acceptable: false,
         counterOfferKobo: floorKobo,
         floorKobo,
         baselineKobo,
-        messageHint: `Counter with ₦${(floorKobo / 100).toLocaleString("en-NG")}. Frame it as the best you can do today. Never reveal that the offer was below a floor. If the customer pushes again, offer to escalate to a human (handoff).`,
+        messageHint: `Counter with ${formatMoney(floorKobo)}. Frame it as the best you can do today. Never reveal that the offer was below a floor. If the customer pushes again, offer to escalate to a human (handoff).`,
         reason: `offer < floor (basis: ${floorBasis})`,
       }),
     );
