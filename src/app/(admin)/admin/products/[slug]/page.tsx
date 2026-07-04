@@ -4,7 +4,7 @@ import {
   getProductAuditSummary,
   listCategories,
 } from "@/lib/data/products";
-import { getProductSalesHistory } from "@/lib/data/product-history";
+import { getProductSalesHistory, getProductActivity } from "@/lib/data/product-history";
 import { ProductEditorClient } from "./editor-client";
 
 // Read live product data — without this the page would fall back to mock
@@ -18,10 +18,11 @@ interface PageProps {
 export default async function AdminProductEditorPage({ params }: PageProps) {
   const product = await getProductBySlug(params.slug);
   if (!product) notFound();
-  const [audit, categories, history] = await Promise.all([
+  const [audit, categories, history, activity] = await Promise.all([
     getProductAuditSummary(product.id),
     listCategories(),
     getProductSalesHistory(product.id),
+    getProductActivity(product.id),
   ]);
   return (
     <ProductEditorClient
@@ -29,6 +30,7 @@ export default async function AdminProductEditorPage({ params }: PageProps) {
       audit={audit}
       categories={categories}
       history={history}
+      activity={activity}
     />
   );
 }
