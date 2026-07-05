@@ -11,6 +11,7 @@ import "server-only";
 
 import { db, hasDatabase, withRetry } from "@/lib/db";
 import { ORDER_SOURCE_LABELS } from "@/lib/order-source";
+import { formatMoney } from "@/lib/money";
 
 export interface ProductSaleRow {
   orderNumber: string;
@@ -158,4 +159,116 @@ export async function getProductSalesHistory(productId: string): Promise<Product
     rows: rows.slice(0, ROW_CAP),
     rowsTotal: rows.length,
   };
+}
+
+// ── Product activity (provenance + audit log) ───────────────────────────────
+
+export interface ProductChange {
+  field: string;
+  from: string;
+  to: string;
+}
+export interface ProductActivityEvent {
+  action: string;
+  label: string;
+  actor: string | null; // staff name; null → system / unknown
+  actorType: string; // "staff" | "ai" | "system" | ...
+  at: string; // ISO
+  changes: ProductChange[];
+}
+export interface ProductActivity {
+  /** How the product got into the catalogue. */
+  addedBy: {
+    name: string | null;
+    /** "staff" = created in admin, "bumpa" = bulk-imported, "unknown" = pre-audit. */
+    via: "staff" | "bumpa" | "unknown";
+    at: string | null;
+  };
+  events: ProductActivityEvent[];
+  eventsTotal: number;
+}
+
+const EMPTY_ACTIVITY: ProductActivity = {
+  addedBy: { name: null, via: "unknown", at: null },
+  events: [],
+  eventsTotal: 0,
+};
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const ACTION_LABELS: Record<string, string> = {
+  "product.create": "Created",
+  "product.update": "Edited",
+  "product.price.change": "Price changed",
+  "product.stock_adjust": "Stock adjusted",
+  "product.archive": "Archived",
+  "product.unarchive": "Restored",
+  "product.delete": "Deleted",
+  "product.duplicate": "Duplicated",
+  "asset.upload": "Image uploaded",
+};
+
+// Fields worth surfacing in an edit diff, with display labels + how to format.
+const FIELD_LABELS: Record<string, string> = {
+  name: "Name", brand: "Brand", priceKobo: "Price", saleKobo: "Sale price",
+  costPriceKobo: "Cost", published: "Published", saleActive: "On sale",
+  featured: "Featured", preorder: "Pre-order", slug: "Slug", moq: "Min order qty",
+};
+const MONEY_FIELDS = new Set(["priceKobo", "saleKobo", "costPriceKobo"]);
+const BOOL_FIELDS = new Set(["published", "saleActive", "featured", "preorder"]);
+
+function fmtField(key: string, val: unknown): string {
+  if (val == null) return "—";
+  if (MONEY_FIELDS.has(key)) return formatMoney(Number(val));
+  if (BOOL_FIELDS.has(key)) return val ? "Yes" : "No";
+  return String(val);
+}
+
+function diffChanges(before: unknown, after: unknown): ProductChange[] {
+  const b = (before ?? {}) as Record<string, unknown>;
+  const a = (after ?? {}) as Record<string, unknown>;
+  const changes: ProductChange[] = [];
+  for (const key of Object.keys(FIELD_LABELS)) {
+    if (!(key in b) && !(key in a)) continue;
+    if (JSON.stringify(b[key]) === JSON.stringify(a[key])) continue;
+    changes.push({ field: FIELD_LABELS[key]!, from: fmtField(key, b[key]), to: fmtField(key, a[key]) });
+  }
+  return changes;
+}
+
+export async function getProductActivity(productId: string): Promise<ProductActivity> {
+  if (!hasDatabase || !UUID_RE.test(productId)) return EMPTY_ACTIVITY;
+
+  const [product, logs] = await Promise.all([
+    withRetry(() => db.product.findUnique({ where: { id: productId }, select: { createdAt: true, tags: true } })),
+    withRetry(() =>
+      db.auditLog.findMany({
+        where: { entityType: "product", entityId: productId },
+        select: { action: true, actorType: true, before: true, after: true, createdAt: true, actor: { select: { name: true } } },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+      }),
+    ),
+  ]);
+
+  const createLog = logs.find((l) => l.action === "product.create");
+  let addedBy: ProductActivity["addedBy"];
+  if (createLog) {
+    addedBy = { name: createLog.actor?.name ?? "Staff", via: "staff", at: createLog.createdAt.toISOString() };
+  } else if (product?.tags?.includes("bumpa-import")) {
+    addedBy = { name: "Bumpa import", via: "bumpa", at: product.createdAt.toISOString() };
+  } else {
+    addedBy = { name: null, via: "unknown", at: product?.createdAt?.toISOString() ?? null };
+  }
+
+  const events: ProductActivityEvent[] = logs.map((l) => ({
+    action: l.action,
+    label: ACTION_LABELS[l.action] ?? l.action.replace(/[._]/g, " "),
+    actor: l.actor?.name ?? null,
+    actorType: l.actorType,
+    at: l.createdAt.toISOString(),
+    changes: l.action === "product.update" ? diffChanges(l.before, l.after) : [],
+  }));
+
+  return { addedBy, events, eventsTotal: events.length };
 }
