@@ -11,12 +11,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { searchProducts, listProducts } from "@/lib/data/products";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { formatMoney } from "@/lib/money";
+import { env } from "@/lib/env";
+import { SITE } from "@/lib/site";
 
 export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
   try {
     // Public tool: no auth required — read-only catalogue/quote data.
+    const appBaseUrl = env.NEXT_PUBLIC_APP_URL ?? SITE.url;
     const sp = req.nextUrl.searchParams;
     const q = sp.get("q")?.trim() ?? "";
     const category = sp.get("category")?.trim() ?? undefined;
@@ -34,6 +37,7 @@ export async function GET(req: NextRequest) {
       products = hits.map((p) => ({
         id: p.id,
         slug: p.slug,
+        productUrl: `${appBaseUrl}/product/${p.slug}`,
         name: p.name,
         brand: p.brand,
         category: p.category,
@@ -56,6 +60,7 @@ export async function GET(req: NextRequest) {
       products = list.map((p) => ({
         id: p.id,
         slug: p.slug,
+        productUrl: `${appBaseUrl}/product/${p.slug}`,
         name: p.name,
         brand: p.brand,
         category: p.category,
