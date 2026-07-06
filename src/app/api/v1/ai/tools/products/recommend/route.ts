@@ -19,12 +19,15 @@ import {
   listProducts,
 } from "@/lib/data/products";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
+import { env } from "@/lib/env";
+import { SITE } from "@/lib/site";
 
 export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
   try {
     // Public tool: no auth required — read-only catalogue/quote data.
+    const appBaseUrl = env.NEXT_PUBLIC_APP_URL ?? SITE.url;
     const sp = req.nextUrl.searchParams;
     const relatedTo = sp.get("relatedTo")?.trim() ?? undefined;
     const category = sp.get("category")?.trim() ?? undefined;
@@ -61,6 +64,7 @@ export async function GET(req: NextRequest) {
         products: products.map((p) => ({
           id: p.id,
           slug: p.slug,
+          productUrl: `${appBaseUrl}/product/${p.slug}`,
           name: p.name,
           brand: p.brand,
           category: p.category,

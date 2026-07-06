@@ -15,6 +15,8 @@ import { getProductBySlug } from "@/lib/data/products";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { NotFoundError } from "@/lib/errors";
 import { formatMoney } from "@/lib/money";
+import { env } from "@/lib/env";
+import { SITE } from "@/lib/site";
 
 export const runtime = "nodejs";
 
@@ -24,6 +26,7 @@ export async function GET(
 ) {
   try {
     // Public tool: no auth required — read-only catalogue/quote data.
+    const appBaseUrl = env.NEXT_PUBLIC_APP_URL ?? SITE.url;
 
     const p = await getProductBySlug(params.slug);
     if (!p) throw new NotFoundError("Product");
@@ -32,6 +35,7 @@ export async function GET(
       apiSuccess({
         id: p.id,
         slug: p.slug,
+        productUrl: `${appBaseUrl}/product/${p.slug}`,
         name: p.name,
         brand: p.brand,
         category: p.category,
