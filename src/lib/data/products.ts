@@ -391,6 +391,15 @@ export interface ProductSearchHit {
   saleActive: boolean;
   category: string;
   stock: number;
+  /** Variants for the order/POS builder to pick from. A product with a single
+   *  default variant has one entry; multi-variant products let staff choose. */
+  variants: {
+    id: string;
+    label: string;
+    /** Variant-specific price; null → falls back to the product price. */
+    priceKobo: number | null;
+    stock: number;
+  }[];
 }
 
 export async function searchProducts(
@@ -418,7 +427,11 @@ export async function searchProducts(
       },
       include: {
         variants: {
+          orderBy: { position: "asc" },
           select: {
+            id: true,
+            label: true,
+            priceKobo: true,
             storeStock: {
               ...(storeId ? { where: { storeId } } : {}),
               select: { onHand: true },
@@ -456,6 +469,12 @@ export async function searchProducts(
           (a, v) => a + v.storeStock.reduce((b, s) => b + s.onHand, 0),
           0,
         ),
+        variants: p.variants.map((v) => ({
+          id: v.id,
+          label: v.label,
+          priceKobo: v.priceKobo == null ? null : Number(v.priceKobo),
+          stock: v.storeStock.reduce((b, s) => b + s.onHand, 0),
+        })),
       };
     });
 }

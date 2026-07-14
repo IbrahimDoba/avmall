@@ -21,6 +21,13 @@ import { formatMoney } from "@/lib/money";
 import { MANUAL_ORDER_SOURCES, DEFAULT_MANUAL_SOURCE, type OrderSource } from "@/lib/order-source";
 import { cn } from "@/lib/utils";
 
+interface ProductVariantHit {
+  id: string;
+  label: string;
+  priceKobo: number | null;
+  stock: number;
+}
+
 interface ProductHit {
   id: string;
   slug: string;
@@ -31,6 +38,7 @@ interface ProductHit {
   saleKobo: number | null;
   saleActive: boolean;
   stock: number;
+  variants: ProductVariantHit[];
 }
 
 interface DraftLine {
@@ -41,6 +49,9 @@ interface DraftLine {
   unitKobo: number;
   stock: number;
   qty: number;
+  /** The chosen variant. Always set; label only shown for multi-variant products. */
+  variantId: string;
+  variantLabel?: string;
 }
 
 export default function AdminCreateOrderPage() {
@@ -108,6 +119,7 @@ export default function AdminCreateOrderPage() {
         body: JSON.stringify({
           items: resolved.map((l) => ({
             productSlug: l.slug,
+            variantId: l.variantId,
             quantity: l.qty,
           })),
           contact: {
@@ -212,17 +224,22 @@ export default function AdminCreateOrderPage() {
   const shipping = 0;
   const total = subtotal - discountKobo + shipping;
 
-  function addProduct(hit: ProductHit) {
+  function addProduct(hit: ProductHit, variant?: ProductVariantHit) {
+    const v = variant ?? hit.variants[0];
+    if (!v) return;
     const unitKobo =
-      hit.saleActive && hit.saleKobo != null ? hit.saleKobo : hit.priceKobo;
+      v.priceKobo ??
+      (hit.saleActive && hit.saleKobo != null ? hit.saleKobo : hit.priceKobo);
+    // Only surface the variant label when the product actually has a choice.
+    const showLabel = hit.variants.length > 1;
     setLines((prev) => {
-      const idx = prev.findIndex((l) => l.slug === hit.slug);
+      const idx = prev.findIndex((l) => l.slug === hit.slug && l.variantId === v.id);
       if (idx >= 0) {
         const existing = prev[idx]!;
         const next = [...prev];
         next[idx] = {
           ...existing,
-          qty: Math.min(existing.qty + 1, Math.max(1, hit.stock)),
+          qty: Math.min(existing.qty + 1, Math.max(1, v.stock)),
         };
         return next;
       }
@@ -234,8 +251,10 @@ export default function AdminCreateOrderPage() {
           brand: hit.brand,
           imageUrl: hit.imageUrl,
           unitKobo,
-          stock: hit.stock,
+          stock: v.stock,
           qty: 1,
+          variantId: v.id,
+          ...(showLabel && { variantLabel: v.label }),
         },
       ];
     });
@@ -296,40 +315,93 @@ export default function AdminCreateOrderPage() {
                       ) : matches.length === 0 ? (
                         <div className="p-4 text-xs text-fg-muted">No matches</div>
                       ) : (
-                        matches.map((p) => (
-                          <button
-                            key={p.id}
-                            onClick={() => addProduct(p)}
-                            className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-surface-2 text-left"
-                          >
-                            <div className="relative size-9 rounded-md flex-shrink-0 overflow-hidden bg-surface-2">
-                              <Image
-                                src={p.imageUrl}
-                                alt={p.name}
-                                fill
-                                sizes="36px"
-                                className="object-cover"
-                              />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-sm font-semibold truncate">{p.name}</div>
-                              <div className="text-[11px] text-fg-muted">
-                                {p.brand} ·{" "}
-                                <Money
-                                  kobo={
-                                    p.saleActive && p.saleKobo != null
-                                      ? p.saleKobo
-                                      : p.priceKobo
-                                  }
-                                />
-                                {p.stock === 0 && (
-                                  <span className="ml-2 text-danger">Out of stock</span>
-                                )}
+                        matches.map((p) =>
+                          p.variants.length > 1 ? (
+                            // Multi-variant: force a choice — render one chip per
+                            // variant so the right colour/size is always recorded.
+                            <div
+                              key={p.id}
+                              className="border-b border-border last:border-b-0 px-3 py-2.5"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="relative size-9 rounded-md flex-shrink-0 overflow-hidden bg-surface-2">
+                                  <Image
+                                    src={p.imageUrl}
+                                    alt={p.name}
+                                    fill
+                                    sizes="36px"
+                                    className="object-cover"
+                                  />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-sm font-semibold truncate">{p.name}</div>
+                                  <div className="text-[11px] text-fg-muted">
+                                    {p.brand} · pick a variant
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 mt-1.5 pl-12">
+                                {p.variants.map((v) => (
+                                  <button
+                                    key={v.id}
+                                    type="button"
+                                    onClick={() => addProduct(p, v)}
+                                    disabled={v.stock === 0}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border-strong text-xs hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                                  >
+                                    <span className="font-semibold">{v.label}</span>
+                                    <Money
+                                      kobo={
+                                        v.priceKobo ??
+                                        (p.saleActive && p.saleKobo != null
+                                          ? p.saleKobo
+                                          : p.priceKobo)
+                                      }
+                                      className="text-fg-muted"
+                                    />
+                                    <span className={v.stock === 0 ? "text-danger" : "text-fg-subtle"}>
+                                      · {v.stock}
+                                    </span>
+                                  </button>
+                                ))}
                               </div>
                             </div>
-                            <Plus className="size-4 text-fg-muted" />
-                          </button>
-                        ))
+                          ) : (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => addProduct(p)}
+                              className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-surface-2 text-left"
+                            >
+                              <div className="relative size-9 rounded-md flex-shrink-0 overflow-hidden bg-surface-2">
+                                <Image
+                                  src={p.imageUrl}
+                                  alt={p.name}
+                                  fill
+                                  sizes="36px"
+                                  className="object-cover"
+                                />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-semibold truncate">{p.name}</div>
+                                <div className="text-[11px] text-fg-muted">
+                                  {p.brand} ·{" "}
+                                  <Money
+                                    kobo={
+                                      p.saleActive && p.saleKobo != null
+                                        ? p.saleKobo
+                                        : p.priceKobo
+                                    }
+                                  />
+                                  {p.stock === 0 && (
+                                    <span className="ml-2 text-danger">Out of stock</span>
+                                  )}
+                                </div>
+                              </div>
+                              <Plus className="size-4 text-fg-muted" />
+                            </button>
+                          ),
+                        )
                       )}
                     </div>
                   )}
@@ -344,7 +416,7 @@ export default function AdminCreateOrderPage() {
                   <div className="mt-3 flex flex-col">
                     {resolved.map((l, i) => (
                       <div
-                        key={l.slug}
+                        key={`${l.slug}-${l.variantId}`}
                         className="flex flex-wrap items-center gap-x-3 gap-y-2.5 py-3 border-t border-border first:border-t-0"
                       >
                         <div className="relative size-12 rounded-md flex-shrink-0 overflow-hidden bg-surface-2">
@@ -358,6 +430,11 @@ export default function AdminCreateOrderPage() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-semibold truncate">{l.name}</div>
+                          {l.variantLabel && (
+                            <div className="text-[11px] font-semibold text-brand-primary">
+                              {l.variantLabel}
+                            </div>
+                          )}
                           <div className="text-[11px] text-fg-muted">
                             {l.brand} · <Money kobo={l.unitKobo} /> each ·{" "}
                             <span className={l.stock < l.qty ? "text-danger" : ""}>
