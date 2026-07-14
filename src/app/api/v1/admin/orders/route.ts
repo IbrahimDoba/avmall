@@ -43,6 +43,7 @@ const bodySchema = z.object({
     .array(
       z.object({
         productSlug: z.string().min(1),
+        variantId: z.string().uuid().optional(),
         quantity: z.number().int().positive(),
       }),
     )
@@ -144,13 +145,22 @@ export async function POST(req: NextRequest) {
       const p = productBySlug.get(item.productSlug);
       if (!p) throw new NotFoundError(`Product ${item.productSlug}`);
 
-      // Default to a variant in stock at this store, else the first variant.
-      const variant =
-        p.variants.find((v) => {
-          const s = v.storeStock[0];
-          return s && s.onHand - s.reserved > 0;
-        }) ?? p.variants[0];
-      if (!variant) throw new NotFoundError(`Variant for ${item.productSlug}`);
+      // Use the staff-selected variant when provided (validated against this
+      // product); otherwise default to one in stock at this store, else the
+      // first variant.
+      const variant = item.variantId
+        ? p.variants.find((v) => v.id === item.variantId)
+        : (p.variants.find((v) => {
+            const s = v.storeStock[0];
+            return s && s.onHand - s.reserved > 0;
+          }) ?? p.variants[0]);
+      if (!variant) {
+        throw new NotFoundError(
+          item.variantId
+            ? `Variant ${item.variantId} for ${item.productSlug}`
+            : `Variant for ${item.productSlug}`,
+        );
+      }
 
       const unitKobo = Number(
         variant.priceKobo ??

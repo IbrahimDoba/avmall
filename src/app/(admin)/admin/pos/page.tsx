@@ -33,6 +33,13 @@ import { formatMoney } from "@/lib/money";
 import { MANUAL_ORDER_SOURCES, DEFAULT_MANUAL_SOURCE, type OrderSource } from "@/lib/order-source";
 import { cn } from "@/lib/utils";
 
+interface ProductVariantHit {
+  id: string;
+  label: string;
+  priceKobo: number | null;
+  stock: number;
+}
+
 interface ProductHit {
   id: string;
   slug: string;
@@ -43,9 +50,12 @@ interface ProductHit {
   saleKobo: number | null;
   saleActive: boolean;
   stock: number;
+  variants: ProductVariantHit[];
 }
 
 interface CartLine {
+  /** Stable identity = slug + variant, so two variants of one product coexist. */
+  id: string;
   slug: string;
   name: string;
   brand: string;
@@ -53,6 +63,8 @@ interface CartLine {
   unitKobo: number;
   stock: number;
   qty: number;
+  variantId: string;
+  variantLabel?: string;
 }
 
 type Method = "cash" | "pos" | "bank_transfer";
@@ -157,11 +169,17 @@ export default function AdminPosPage() {
     };
   }, [search]);
 
-  function addProduct(hit: ProductHit) {
+  function addProduct(hit: ProductHit, variant?: ProductVariantHit) {
+    const v = variant ?? hit.variants[0];
+    if (!v) return;
     const unitKobo =
-      hit.saleActive && hit.saleKobo != null ? hit.saleKobo : hit.priceKobo;
+      v.priceKobo ??
+      (hit.saleActive && hit.saleKobo != null ? hit.saleKobo : hit.priceKobo);
+    // Only show the variant label when the product actually has a choice.
+    const showLabel = hit.variants.length > 1;
+    const id = `${hit.slug}::${v.id}`;
     setLines((prev) => {
-      const idx = prev.findIndex((l) => l.slug === hit.slug);
+      const idx = prev.findIndex((l) => l.id === id);
       if (idx >= 0) {
         const existing = prev[idx]!;
         const next = [...prev];
@@ -171,13 +189,16 @@ export default function AdminPosPage() {
       return [
         ...prev,
         {
+          id,
           slug: hit.slug,
           name: hit.name,
           brand: hit.brand,
           imageUrl: hit.imageUrl,
           unitKobo,
-          stock: hit.stock,
+          stock: v.stock,
           qty: 1,
+          variantId: v.id,
+          ...(showLabel && { variantLabel: v.label }),
         },
       ];
     });
@@ -186,14 +207,14 @@ export default function AdminPosPage() {
     searchRef.current?.focus();
   }
 
-  function setQty(slug: string, qty: number) {
+  function setQty(id: string, qty: number) {
     setLines((prev) =>
-      prev.map((l) => (l.slug === slug ? { ...l, qty: Math.max(1, qty) } : l)),
+      prev.map((l) => (l.id === id ? { ...l, qty: Math.max(1, qty) } : l)),
     );
   }
 
-  function removeLine(slug: string) {
-    setLines((prev) => prev.filter((l) => l.slug !== slug));
+  function removeLine(id: string) {
+    setLines((prev) => prev.filter((l) => l.id !== id));
   }
 
   function addPayRow(method: Method) {
@@ -275,7 +296,11 @@ export default function AdminPosPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          items: lines.map((l) => ({ productSlug: l.slug, quantity: l.qty })),
+          items: lines.map((l) => ({
+            productSlug: l.slug,
+            variantId: l.variantId,
+            quantity: l.qty,
+          })),
           payments,
           manualDiscountKobo: discountKobo,
           source,
@@ -476,6 +501,45 @@ export default function AdminPosPage() {
                       matches.map((p) => {
                         const price =
                           p.saleActive && p.saleKobo != null ? p.saleKobo : p.priceKobo;
+                        if (p.variants.length > 1) {
+                          // Multi-variant: force a choice so the right colour/size
+                          // is rung up (and its own stock is decremented).
+                          return (
+                            <div
+                              key={p.id}
+                              className="px-3 py-2.5 border-b border-border last:border-b-0"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="relative size-10 rounded-md flex-shrink-0 overflow-hidden bg-surface-2">
+                                  <Image src={p.imageUrl} alt={p.name} fill sizes="40px" className="object-cover" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-sm font-semibold truncate">{p.name}</div>
+                                  <div className="text-[11px] text-fg-muted">
+                                    {p.brand} · pick a variant
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 mt-1.5 pl-12">
+                                {p.variants.map((v) => (
+                                  <button
+                                    key={v.id}
+                                    type="button"
+                                    onClick={() => addProduct(p, v)}
+                                    disabled={v.stock <= 0}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border-strong text-xs hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                                  >
+                                    <span className="font-semibold">{v.label}</span>
+                                    <Money kobo={v.priceKobo ?? price} className="text-fg-muted" />
+                                    <span className={v.stock <= 0 ? "text-danger" : "text-fg-subtle"}>
+                                      · {v.stock}
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        }
                         return (
                           <button
                             key={p.id}
@@ -524,12 +588,17 @@ export default function AdminPosPage() {
                     {lines.map((l) => {
                       const lowStock = l.stock < l.qty;
                       return (
-                        <div key={l.slug} className="flex items-center gap-3 p-3">
+                        <div key={l.id} className="flex items-center gap-3 p-3">
                           <div className="relative size-12 rounded-md flex-shrink-0 overflow-hidden bg-surface-2">
                             <Image src={l.imageUrl} alt={l.name} fill sizes="48px" className="object-cover" />
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="text-sm font-semibold truncate">{l.name}</div>
+                            {l.variantLabel && (
+                              <div className="text-[11px] font-semibold text-brand-primary">
+                                {l.variantLabel}
+                              </div>
+                            )}
                             <div className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-fg-muted">
                               <span>
                                 <Money kobo={l.unitKobo} /> each
@@ -545,7 +614,7 @@ export default function AdminPosPage() {
                           </div>
                           <div className="inline-flex items-center border border-border-strong rounded-md flex-shrink-0">
                             <button
-                              onClick={() => setQty(l.slug, l.qty - 1)}
+                              onClick={() => setQty(l.id, l.qty - 1)}
                               className="size-8 flex items-center justify-center hover:bg-surface-2"
                               aria-label="Decrease"
                             >
@@ -553,7 +622,7 @@ export default function AdminPosPage() {
                             </button>
                             <span className="w-9 text-center text-sm font-bold tabular">{l.qty}</span>
                             <button
-                              onClick={() => setQty(l.slug, l.qty + 1)}
+                              onClick={() => setQty(l.id, l.qty + 1)}
                               className="size-8 flex items-center justify-center hover:bg-surface-2"
                               aria-label="Increase"
                             >
@@ -561,7 +630,7 @@ export default function AdminPosPage() {
                             </button>
                           </div>
                           <button
-                            onClick={() => removeLine(l.slug)}
+                            onClick={() => removeLine(l.id)}
                             className="p-1.5 text-fg-muted hover:text-danger flex-shrink-0"
                             aria-label="Remove"
                           >
