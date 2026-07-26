@@ -454,9 +454,11 @@ export function ProductsListClient({ products, categories }: Props) {
             subtitle={`${products.length} products · ${lowStock} low stock · ${outOfStock} out of stock`}
             actions={
               <>
-                <Button variant="secondary" size="sm">
-                  <Download className="size-3.5" /> Import / Export
-                </Button>
+                <a href="/api/v1/admin/products/export">
+                  <Button variant="secondary" size="sm">
+                    <Download className="size-3.5" /> Export CSV
+                  </Button>
+                </a>
                 <Link href="/admin/products/new">
                   <Button size="sm">
                     <Plus className="size-3.5" /> Add product
