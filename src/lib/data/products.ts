@@ -639,6 +639,10 @@ async function queryProductHits(
       else if (short.includes(term)) s += 3;
       else if (long.includes(term)) s += 1;
     }
+    // Lead with what's actually in stock — a moderate boost, so a strong exact
+    // match that happens to be out of stock still shows, just lower.
+    const stk = p.variants.reduce((a, v) => a + v.storeStock.reduce((b, ss) => b + ss.onHand, 0), 0);
+    if (stk > 0) s += 8;
     if (p.featured) s += 3;
     return s;
   };

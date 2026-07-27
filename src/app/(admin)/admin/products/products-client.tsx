@@ -16,6 +16,7 @@ import {
   FolderInput,
   Loader2,
   AlertTriangle,
+  Upload,
 } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { AdminTopBar } from "@/components/admin/topbar";
@@ -79,6 +80,8 @@ export function ProductsListClient({ products, categories }: Props) {
   const [newCatName, setNewCatName] = React.useState("");
   const [brandInput, setBrandInput] = React.useState("");
   const [categorizing, setCategorizing] = React.useState(false);
+  const stockFileRef = React.useRef<HTMLInputElement>(null);
+  const [importingStock, setImportingStock] = React.useState(false);
 
   const lowStock = products.filter((p) => p.stock > 0 && p.stock < 20 && !p.preorder).length;
   const outOfStock = products.filter((p) => p.stock === 0 && !p.preorder).length;
@@ -234,6 +237,40 @@ export function ProductsListClient({ products, categories }: Props) {
       toast.error("Network error");
     } finally {
       setCategorizing(false);
+    }
+  }
+
+  async function handleStockImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    setImportingStock(true);
+    try {
+      const csv = await file.text();
+      const res = await fetch("/api/v1/admin/products/bulk-stock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csv }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json?.error?.message ?? "Stock import failed");
+        return;
+      }
+      const d = json.data ?? {};
+      const bits: string[] = [];
+      if (d.notFound?.length) bits.push(`${d.notFound.length} not found`);
+      if (d.multiVariant?.length) bits.push(`${d.multiVariant.length} multi-variant skipped`);
+      if (d.invalid?.length) bits.push(`${d.invalid.length} invalid`);
+      toast.success(
+        `Updated stock for ${d.updated ?? 0} product${d.updated === 1 ? "" : "s"}` +
+          (bits.length ? ` · ${bits.join(" · ")}` : ""),
+      );
+      router.refresh();
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setImportingStock(false);
     }
   }
 
@@ -459,6 +496,27 @@ export function ProductsListClient({ products, categories }: Props) {
                     <Download className="size-3.5" /> Export CSV
                   </Button>
                 </a>
+                <input
+                  ref={stockFileRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={handleStockImport}
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={importingStock}
+                  onClick={() => stockFileRef.current?.click()}
+                  title="Upload the exported CSV with the stock column filled in to set stock in bulk"
+                >
+                  {importingStock ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Upload className="size-3.5" />
+                  )}
+                  Import stock
+                </Button>
                 <Link href="/admin/products/new">
                   <Button size="sm">
                     <Plus className="size-3.5" /> Add product
