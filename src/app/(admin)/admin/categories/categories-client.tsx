@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import {
@@ -14,6 +15,7 @@ import {
   Check,
   Tag,
   Package,
+  GripVertical,
 } from "lucide-react";
 import { AdminTopBar } from "@/components/admin/topbar";
 import { PageHeader } from "@/components/admin/page-header";
@@ -57,10 +59,56 @@ export function CategoriesClient({ initialCategories }: Props) {
   // While the session loads (perms undefined) show actions optimistically; the
   // API enforces the real permission regardless (CLAUDE.md §2.5).
   const can = (p: string) => !perms || perms.includes(p);
+  const canReorder = can("products.edit");
 
-  const categories = initialCategories;
+  // Stateful copy so drag-to-reorder can update order optimistically; re-synced
+  // whenever the server sends a fresh list (after any mutation → router.refresh).
+  const [categories, setCategories] = React.useState(initialCategories);
+  React.useEffect(() => setCategories(initialCategories), [initialCategories]);
+  const categoriesRef = React.useRef(categories);
+  categoriesRef.current = categories;
+
   const totalProducts = categories.reduce((a, c) => a + c.totalProducts, 0);
   const liveProducts = categories.reduce((a, c) => a + c.publishedProducts, 0);
+
+  // ── Drag-to-reorder (native HTML5 DnD, no extra deps) ──────────────────────
+  const [dragIndex, setDragIndex] = React.useState<number | null>(null);
+
+  function onDragOver(e: React.DragEvent, overIndex: number) {
+    if (!canReorder) return;
+    e.preventDefault();
+    if (dragIndex === null || dragIndex === overIndex) return;
+    setCategories((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(dragIndex, 1);
+      if (moved) next.splice(overIndex, 0, moved);
+      return next;
+    });
+    setDragIndex(overIndex);
+  }
+
+  async function persistOrder() {
+    try {
+      const res = await fetch("/api/v1/admin/categories", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slugs: categoriesRef.current.map((c) => c.slug) }),
+      });
+      if (!res.ok) {
+        const json = await res.json();
+        toast.error(json?.error?.message ?? "Could not save order");
+        router.refresh(); // roll back to the server's order
+      }
+    } catch {
+      toast.error("Network error");
+      router.refresh();
+    }
+  }
+
+  function onDragEnd() {
+    if (dragIndex !== null) persistOrder();
+    setDragIndex(null);
+  }
 
   // ── Create ────────────────────────────────────────────────────────────────
   const [newName, setNewName] = React.useState("");
@@ -176,13 +224,40 @@ export function CategoriesClient({ initialCategories }: Props) {
   const [searching, setSearching] = React.useState(false);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [adding, setAdding] = React.useState(false);
+  // Browse mode — recent products not already in this category, shown when the
+  // search box is empty so admins can batch-assign without typing.
+  const [browse, setBrowse] = React.useState<ProductHit[]>([]);
+  const [browsing, setBrowsing] = React.useState(false);
 
   function openAdd(c: AdminCategory) {
     setAddTarget(c);
     setQuery("");
     setResults([]);
+    setBrowse([]);
     setSelected(new Set());
   }
+
+  // Load the browse list whenever the Add dialog opens with an empty query.
+  React.useEffect(() => {
+    if (!addTarget || query.trim().length >= 2) return;
+    setBrowsing(true);
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/v1/admin/products/browse?notInCategory=${encodeURIComponent(addTarget.slug)}&limit=50`,
+          { signal: controller.signal },
+        );
+        const json = await res.json();
+        if (res.ok) setBrowse((json.data?.products ?? []) as ProductHit[]);
+      } catch {
+        /* aborted or network blip */
+      } finally {
+        setBrowsing(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [addTarget, query]);
 
   // Debounced product search while the Add dialog is open.
   React.useEffect(() => {
@@ -254,6 +329,12 @@ export function CategoriesClient({ initialCategories }: Props) {
     ? categories.filter((c) => c.slug !== deleteTarget.slug)
     : [];
 
+  // Picker shows the browse list while the search box is empty, search hits once
+  // the admin types.
+  const isBrowse = !!addTarget && query.trim().length < 2;
+  const pickerLoading = isBrowse ? browsing : searching;
+  const pickerItems = isBrowse ? browse : results;
+
   return (
     <>
       <AdminTopBar breadcrumbs={[{ label: "Categories" }]} />
@@ -291,15 +372,30 @@ export function CategoriesClient({ initialCategories }: Props) {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-              {categories.map((c) => (
+              {categories.map((c, i) => (
                 <div
                   key={c.id}
-                  className="rounded-lg border border-border bg-surface p-4 flex flex-col gap-3"
+                  draggable={canReorder}
+                  onDragStart={() => canReorder && setDragIndex(i)}
+                  onDragOver={(e) => onDragOver(e, i)}
+                  onDragEnd={onDragEnd}
+                  className={cn(
+                    "rounded-lg border border-border bg-surface p-4 flex flex-col gap-3 transition-opacity",
+                    dragIndex === i && "opacity-40",
+                  )}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="font-bold truncate">{c.name}</div>
-                      <div className="text-[11px] text-fg-muted font-mono truncate">/{c.slug}</div>
+                    <div className="flex items-start gap-1.5 min-w-0">
+                      {canReorder && (
+                        <GripVertical
+                          className="size-4 mt-0.5 text-fg-subtle flex-shrink-0 cursor-grab active:cursor-grabbing"
+                          aria-hidden
+                        />
+                      )}
+                      <div className="min-w-0">
+                        <div className="font-bold truncate">{c.name}</div>
+                        <div className="text-[11px] text-fg-muted font-mono truncate">/{c.slug}</div>
+                      </div>
                     </div>
                     <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[11px] font-bold text-fg-muted flex-shrink-0">
                       <Package className="size-3" />
@@ -307,7 +403,11 @@ export function CategoriesClient({ initialCategories }: Props) {
                     </span>
                   </div>
 
-                  <div className="text-xs text-fg-muted">
+                  <Link
+                    href={`/admin/products?category=${encodeURIComponent(c.slug)}`}
+                    className="text-xs text-fg-muted hover:text-brand-primary transition-colors"
+                    title={`View products in ${c.name}`}
+                  >
                     <span className="font-semibold text-fg">{c.totalProducts}</span> product
                     {c.totalProducts === 1 ? "" : "s"} ·{" "}
                     <span className="font-semibold text-success">{c.publishedProducts}</span> live
@@ -317,7 +417,7 @@ export function CategoriesClient({ initialCategories }: Props) {
                         · {c.totalProducts - c.publishedProducts} draft/archived
                       </span>
                     )}
-                  </div>
+                  </Link>
 
                   <div className="flex items-center gap-1.5 mt-auto pt-1">
                     {can("products.edit") && (
@@ -453,21 +553,23 @@ export function CategoriesClient({ initialCategories }: Props) {
               />
             </div>
 
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-fg-muted">
+              {isBrowse ? "Recent products not in this category" : `Results for “${query.trim()}”`}
+            </div>
+
             <div className="min-h-[8rem] max-h-72 overflow-y-auto rounded-md border border-border divide-y divide-border">
-              {searching ? (
+              {pickerLoading ? (
                 <div className="flex items-center justify-center gap-2 py-10 text-sm text-fg-muted">
-                  <Loader2 className="size-4 animate-spin" /> Searching…
+                  <Loader2 className="size-4 animate-spin" /> {isBrowse ? "Loading…" : "Searching…"}
                 </div>
-              ) : query.trim().length < 2 ? (
+              ) : pickerItems.length === 0 ? (
                 <div className="py-10 text-center text-sm text-fg-muted">
-                  Type at least 2 characters to find products.
-                </div>
-              ) : results.length === 0 ? (
-                <div className="py-10 text-center text-sm text-fg-muted">
-                  No products match “{query.trim()}”.
+                  {isBrowse
+                    ? "No other products to add."
+                    : `No products match “${query.trim()}”.`}
                 </div>
               ) : (
-                results.map((p) => {
+                pickerItems.map((p) => {
                   const alreadyHere = p.category === addTarget?.slug;
                   const isSelected = selected.has(p.slug);
                   return (

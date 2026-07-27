@@ -3,7 +3,7 @@
 import * as React from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Plus,
   Download,
@@ -81,7 +81,13 @@ interface Props {
 export function ProductsListClient({ products, categories }: Props) {
   const router = useRouter();
   const [search, setSearch] = React.useState("");
-  const [categoryValues, setCategoryValues] = React.useState<string[]>([]);
+  // Seed the category filter from the URL (?category=<slug>) so the Categories
+  // page can deep-link straight into this list pre-filtered.
+  const searchParams = useSearchParams();
+  const [categoryValues, setCategoryValues] = React.useState<string[]>(() => {
+    const c = searchParams.get("category");
+    return c ? [c] : [];
+  });
   const [statusValues, setStatusValues] = React.useState<string[]>([]);
   const [imageValues, setImageValues] = React.useState<string[]>([]);
   const [rowSelection, setRowSelection] = React.useState({});

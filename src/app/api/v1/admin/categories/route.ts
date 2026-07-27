@@ -96,3 +96,48 @@ export async function POST(req: NextRequest) {
     return handleApiError(err);
   }
 }
+
+const reorderSchema = z.object({
+  slugs: z.array(z.string().min(1)).min(1, "Provide the ordered category slugs").max(500),
+});
+
+/**
+ * PATCH /api/v1/admin/categories  — persist a new display order.
+ *
+ * Body: { slugs: string[] } in the desired order; each category's `position`
+ * is set to its index, driving the storefront's category ordering.
+ * Permission: products.edit.
+ */
+export async function PATCH(req: NextRequest) {
+  try {
+    const session = await requireStaffSession();
+    requirePermission(session, "products.edit");
+    if (!hasDatabase) {
+      throw new AppError("DB_NOT_CONFIGURED", "Categories require DATABASE_URL.", 503);
+    }
+
+    const parsed = reorderSchema.safeParse(await req.json().catch(() => ({})));
+    if (!parsed.success) {
+      throw new ValidationError({ slugs: parsed.error.issues[0]?.message ?? "Invalid" });
+    }
+
+    await db.$transaction(
+      parsed.data.slugs.map((slug, index) =>
+        db.category.updateMany({ where: { slug }, data: { position: index } }),
+      ),
+    );
+
+    await writeAudit({
+      actorUserId: session.id,
+      actorType: "staff",
+      action: "category.reorder",
+      entityType: "category",
+      entityId: session.id,
+      after: { order: parsed.data.slugs },
+    });
+
+    return NextResponse.json(apiSuccess({ reordered: parsed.data.slugs.length }));
+  } catch (err) {
+    return handleApiError(err);
+  }
+}
