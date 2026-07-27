@@ -16,6 +16,7 @@ import {
   FolderInput,
   Loader2,
   AlertTriangle,
+  Upload,
 } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { AdminTopBar } from "@/components/admin/topbar";
@@ -53,6 +54,15 @@ function statusFor(p: Product): StockStatus {
   return "in_stock";
 }
 
+/**
+ * True when the product has at least one real uploaded image. `imageUrl` always
+ * falls back to a seed/placeholder, so it can't be used to detect "no image" —
+ * the reliable signal is whether any ProductImage rows resolved (`imageRecords`).
+ */
+function hasImage(p: Product): boolean {
+  return (p.imageRecords?.length ?? 0) > 0;
+}
+
 const DATE_FMT = new Intl.DateTimeFormat("en-NG", {
   timeZone: "Africa/Lagos",
   day: "numeric",
@@ -73,16 +83,20 @@ export function ProductsListClient({ products, categories }: Props) {
   const [search, setSearch] = React.useState("");
   const [categoryValues, setCategoryValues] = React.useState<string[]>([]);
   const [statusValues, setStatusValues] = React.useState<string[]>([]);
+  const [imageValues, setImageValues] = React.useState<string[]>([]);
   const [rowSelection, setRowSelection] = React.useState({});
   const [categorizeOpen, setCategorizeOpen] = React.useState(false);
   const [chosenCategory, setChosenCategory] = React.useState("");
   const [newCatName, setNewCatName] = React.useState("");
   const [brandInput, setBrandInput] = React.useState("");
   const [categorizing, setCategorizing] = React.useState(false);
+  const stockFileRef = React.useRef<HTMLInputElement>(null);
+  const [importingStock, setImportingStock] = React.useState(false);
 
   const lowStock = products.filter((p) => p.stock > 0 && p.stock < 20 && !p.preorder).length;
   const outOfStock = products.filter((p) => p.stock === 0 && !p.preorder).length;
   const preorders = products.filter((p) => p.preorder).length;
+  const missingImages = products.filter((p) => !hasImage(p)).length;
 
   // Inventory value aggregates — summed only over in-stock products since the
   // user asked for "total ... of all goods in stock".
@@ -114,11 +128,21 @@ export function ProductsListClient({ products, categories }: Props) {
         { value: "archived", label: "Archived" },
       ],
     },
+    {
+      id: "image",
+      label: "Images",
+      values: imageValues,
+      options: [
+        { value: "missing", label: "Missing image" },
+        { value: "has", label: "Has image" },
+      ],
+    },
   ];
 
   const filtered = React.useMemo(() => {
     const archivedSelected = statusValues.includes("archived");
     const stockFilters = statusValues.filter((s) => s !== "archived");
+    const imageFilter = imageValues[0]; // "missing" | "has" | undefined
     return products.filter((p) => {
       if (
         search &&
@@ -134,9 +158,11 @@ export function ProductsListClient({ products, categories }: Props) {
       // "Archived" selected on its own → show only archived products.
       if (!p.archived && archivedSelected && stockFilters.length === 0) return false;
       if (stockFilters.length > 0 && !stockFilters.includes(statusFor(p))) return false;
+      if (imageFilter === "missing" && hasImage(p)) return false;
+      if (imageFilter === "has" && !hasImage(p)) return false;
       return true;
     });
-  }, [search, categoryValues, statusValues, products]);
+  }, [search, categoryValues, statusValues, imageValues, products]);
 
   const selectedCount = Object.values(rowSelection).filter(Boolean).length;
   const selectedSlugs = React.useMemo(
@@ -234,6 +260,40 @@ export function ProductsListClient({ products, categories }: Props) {
       toast.error("Network error");
     } finally {
       setCategorizing(false);
+    }
+  }
+
+  async function handleStockImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    setImportingStock(true);
+    try {
+      const csv = await file.text();
+      const res = await fetch("/api/v1/admin/products/bulk-stock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csv }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json?.error?.message ?? "Stock import failed");
+        return;
+      }
+      const d = json.data ?? {};
+      const bits: string[] = [];
+      if (d.notFound?.length) bits.push(`${d.notFound.length} not found`);
+      if (d.multiVariant?.length) bits.push(`${d.multiVariant.length} multi-variant skipped`);
+      if (d.invalid?.length) bits.push(`${d.invalid.length} invalid`);
+      toast.success(
+        `Updated stock for ${d.updated ?? 0} product${d.updated === 1 ? "" : "s"}` +
+          (bits.length ? ` · ${bits.join(" · ")}` : ""),
+      );
+      router.refresh();
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setImportingStock(false);
     }
   }
 
@@ -451,7 +511,7 @@ export function ProductsListClient({ products, categories }: Props) {
         <div className="p-6 max-w-[1400px] mx-auto">
           <PageHeader
             title="Products"
-            subtitle={`${products.length} products · ${lowStock} low stock · ${outOfStock} out of stock`}
+            subtitle={`${products.length} products · ${lowStock} low stock · ${outOfStock} out of stock · ${missingImages} missing image${missingImages === 1 ? "" : "s"}`}
             actions={
               <>
                 <a href="/api/v1/admin/products/export">
@@ -459,6 +519,27 @@ export function ProductsListClient({ products, categories }: Props) {
                     <Download className="size-3.5" /> Export CSV
                   </Button>
                 </a>
+                <input
+                  ref={stockFileRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={handleStockImport}
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={importingStock}
+                  onClick={() => stockFileRef.current?.click()}
+                  title="Upload the exported CSV with the stock column filled in to set stock in bulk"
+                >
+                  {importingStock ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Upload className="size-3.5" />
+                  )}
+                  Import stock
+                </Button>
                 <Link href="/admin/products/new">
                   <Button size="sm">
                     <Plus className="size-3.5" /> Add product
@@ -509,10 +590,12 @@ export function ProductsListClient({ products, categories }: Props) {
             onFilterChange={(id, values) => {
               if (id === "category") setCategoryValues(values);
               if (id === "status") setStatusValues(values);
+              if (id === "image") setImageValues(values);
             }}
             onClear={() => {
               setCategoryValues([]);
               setStatusValues([]);
+              setImageValues([]);
             }}
             className="mb-4"
           />

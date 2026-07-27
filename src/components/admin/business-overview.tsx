@@ -68,11 +68,12 @@ export function BusinessOverviewSection({
           </div>
 
           {/* Totals */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
             <Total label="Total Sales" value={data.totalSalesKobo} />
+            <Total label="Website Sales" value={data.onlineSalesKobo} sub="website only" />
+            <Total label="Offline Sales" value={data.offlineSalesKobo} sub="all except website" />
             <Total label="Total Settled" value={data.settledKobo} />
             <Total label="Total Owed" value={data.owedKobo} />
-            <Total label="Offline Sales" value={data.offlineSalesKobo} sub="all except website" />
           </div>
 
           {/* Monthly online vs offline */}

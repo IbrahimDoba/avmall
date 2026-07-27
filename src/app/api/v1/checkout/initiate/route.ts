@@ -115,6 +115,17 @@ export async function POST(req: NextRequest) {
       lga: body.shipping.city,
       netSubtotalKobo: dryShip.subtotalKobo - dryShip.bulkDiscountKobo,
     });
+    // No zone matched and no flat fallback is set — we cannot price delivery
+    // for this address. Block checkout rather than silently charging ₦0
+    // shipping (CLAUDE.md §20: never silently fallback without telling the
+    // customer).
+    if (resolvedShipping.source === "none") {
+      throw new AppError(
+        "SHIPPING_UNAVAILABLE",
+        "We can't calculate delivery to this address yet. Please contact us on WhatsApp to complete your order.",
+        422,
+      );
+    }
     const shippingKobo = resolvedShipping.shippingKobo;
     const freeShippingEligible = resolvedShipping.freeShippingEligible;
 

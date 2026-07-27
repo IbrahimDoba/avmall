@@ -143,21 +143,31 @@ export async function resolveShipping(opts: {
   }
 
   if (zone) {
-    const freeShippingEligible =
-      zone.freeOverKobo != null &&
-      BigInt(Math.max(0, Math.round(opts.netSubtotalKobo))) >= zone.freeOverKobo;
-    return {
-      shippingKobo: Number(zone.baseRateKobo),
-      freeShippingEligible,
-      zoneId: zone.id,
-      zone: { name: zone.name, etaDays: zone.etaDays },
-      source,
-    };
+    // A zone must carry a real, positive delivery price. A ₦0 base rate is a
+    // misconfiguration — NOT "free delivery" — so we refuse to use it and let
+    // resolution fall through to the fallback / "none", which the checkout
+    // routes turn into a "contact us on WhatsApp" block. Genuine free delivery
+    // is expressed as a positive base rate waived by the free-over threshold
+    // below, never as a ₦0 rate.
+    const baseRateKobo = Number(zone.baseRateKobo);
+    if (baseRateKobo > 0) {
+      const freeShippingEligible =
+        zone.freeOverKobo != null &&
+        BigInt(Math.max(0, Math.round(opts.netSubtotalKobo))) >= zone.freeOverKobo;
+      return {
+        shippingKobo: baseRateKobo,
+        freeShippingEligible,
+        zoneId: zone.id,
+        zone: { name: zone.name, etaDays: zone.etaDays },
+        source,
+      };
+    }
   }
 
-  // 3. Flat fallback rate.
+  // 3. Flat fallback rate — must also be a real, positive amount. A ₦0 flat
+  // rate is treated as "no rate configured" for the same reason as above.
   const fb = await db.fallbackShipping.findFirst();
-  if (fb?.enabled) {
+  if (fb?.enabled && Number(fb.flatRateKobo) > 0) {
     return {
       shippingKobo: Number(fb.flatRateKobo),
       freeShippingEligible: false,

@@ -19,6 +19,7 @@ import { BankTransferModal } from "@/components/storefront/bank-transfer-modal";
 import { useCart, resolveCart, computeTotals } from "@/stores/cart-store";
 import { toast } from "@/components/ui/toaster";
 import { cn } from "@/lib/utils";
+import { SITE } from "@/lib/site";
 
 // Bank transfer is available everywhere.
 // POS is Kaduna-only — enforced here and at the API level.
@@ -318,8 +319,20 @@ export default function CheckoutPage() {
                     </div>
                   ) : (
                     <div className="p-4 rounded-md bg-warning-bg border border-warning/30 text-sm mb-4 max-w-md">
-                      <div className="font-bold text-warning mb-1">No shipping zone for {state}</div>
-                      <div className="text-fg-muted text-xs">Contact us on WhatsApp for a delivery quote.</div>
+                      <div className="font-bold text-warning mb-1">We can&apos;t price delivery to {state} yet</div>
+                      <div className="text-fg-muted text-xs mb-3">
+                        Message us on WhatsApp and we&apos;ll set up your order and delivery quote right away.
+                      </div>
+                      <a
+                        href={`${SITE.social.whatsapp}?text=${encodeURIComponent(
+                          `Hi Avmall, I'd like to place an order but delivery to ${state} isn't available at checkout. Can you help?`,
+                        )}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 rounded-md bg-brand-accent px-4 py-2 text-sm font-semibold text-white hover:bg-brand-accent-hover"
+                      >
+                        <ExternalLink className="size-4" /> Contact us on WhatsApp
+                      </a>
                     </div>
                   )}
                   <Button onClick={() => setStep(3)} size="lg" disabled={quoteLoading || !shippingZone}>
