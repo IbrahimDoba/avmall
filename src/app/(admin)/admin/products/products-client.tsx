@@ -54,6 +54,15 @@ function statusFor(p: Product): StockStatus {
   return "in_stock";
 }
 
+/**
+ * True when the product has at least one real uploaded image. `imageUrl` always
+ * falls back to a seed/placeholder, so it can't be used to detect "no image" —
+ * the reliable signal is whether any ProductImage rows resolved (`imageRecords`).
+ */
+function hasImage(p: Product): boolean {
+  return (p.imageRecords?.length ?? 0) > 0;
+}
+
 const DATE_FMT = new Intl.DateTimeFormat("en-NG", {
   timeZone: "Africa/Lagos",
   day: "numeric",
@@ -74,6 +83,7 @@ export function ProductsListClient({ products, categories }: Props) {
   const [search, setSearch] = React.useState("");
   const [categoryValues, setCategoryValues] = React.useState<string[]>([]);
   const [statusValues, setStatusValues] = React.useState<string[]>([]);
+  const [imageValues, setImageValues] = React.useState<string[]>([]);
   const [rowSelection, setRowSelection] = React.useState({});
   const [categorizeOpen, setCategorizeOpen] = React.useState(false);
   const [chosenCategory, setChosenCategory] = React.useState("");
@@ -86,6 +96,7 @@ export function ProductsListClient({ products, categories }: Props) {
   const lowStock = products.filter((p) => p.stock > 0 && p.stock < 20 && !p.preorder).length;
   const outOfStock = products.filter((p) => p.stock === 0 && !p.preorder).length;
   const preorders = products.filter((p) => p.preorder).length;
+  const missingImages = products.filter((p) => !hasImage(p)).length;
 
   // Inventory value aggregates — summed only over in-stock products since the
   // user asked for "total ... of all goods in stock".
@@ -117,11 +128,21 @@ export function ProductsListClient({ products, categories }: Props) {
         { value: "archived", label: "Archived" },
       ],
     },
+    {
+      id: "image",
+      label: "Images",
+      values: imageValues,
+      options: [
+        { value: "missing", label: "Missing image" },
+        { value: "has", label: "Has image" },
+      ],
+    },
   ];
 
   const filtered = React.useMemo(() => {
     const archivedSelected = statusValues.includes("archived");
     const stockFilters = statusValues.filter((s) => s !== "archived");
+    const imageFilter = imageValues[0]; // "missing" | "has" | undefined
     return products.filter((p) => {
       if (
         search &&
@@ -137,9 +158,11 @@ export function ProductsListClient({ products, categories }: Props) {
       // "Archived" selected on its own → show only archived products.
       if (!p.archived && archivedSelected && stockFilters.length === 0) return false;
       if (stockFilters.length > 0 && !stockFilters.includes(statusFor(p))) return false;
+      if (imageFilter === "missing" && hasImage(p)) return false;
+      if (imageFilter === "has" && !hasImage(p)) return false;
       return true;
     });
-  }, [search, categoryValues, statusValues, products]);
+  }, [search, categoryValues, statusValues, imageValues, products]);
 
   const selectedCount = Object.values(rowSelection).filter(Boolean).length;
   const selectedSlugs = React.useMemo(
@@ -488,7 +511,7 @@ export function ProductsListClient({ products, categories }: Props) {
         <div className="p-6 max-w-[1400px] mx-auto">
           <PageHeader
             title="Products"
-            subtitle={`${products.length} products · ${lowStock} low stock · ${outOfStock} out of stock`}
+            subtitle={`${products.length} products · ${lowStock} low stock · ${outOfStock} out of stock · ${missingImages} missing image${missingImages === 1 ? "" : "s"}`}
             actions={
               <>
                 <a href="/api/v1/admin/products/export">
@@ -567,10 +590,12 @@ export function ProductsListClient({ products, categories }: Props) {
             onFilterChange={(id, values) => {
               if (id === "category") setCategoryValues(values);
               if (id === "status") setStatusValues(values);
+              if (id === "image") setImageValues(values);
             }}
             onClear={() => {
               setCategoryValues([]);
               setStatusValues([]);
+              setImageValues([]);
             }}
             className="mb-4"
           />
