@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { ShoppingBag, Plus, ScanLine, Package, Archive } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { permissionForPath } from "@/lib/admin-access";
 
 const TABS = [
   { href: "/admin/orders", label: "Orders", icon: ShoppingBag },
@@ -18,20 +20,31 @@ const TABS = [
  *  admin shell so it never overlaps scrolling content. */
 export function StaffMobileNav() {
   const pathname = usePathname();
+  const { data: session } = useSession();
+  const perms = session?.user?.permissions;
+
+  // Only surface tabs the role can open (mirrors the server guard). While the
+  // session loads (perms undefined) show all — the server guard is the real gate.
+  const tabs = TABS.filter((t) => {
+    const required = permissionForPath(t.href);
+    return !required || !perms || perms.includes(required);
+  });
 
   // Longest-prefix match so /admin/orders/new lights up "New", not "Orders".
-  const activeHref = TABS.reduce<string | null>((best, t) => {
+  const activeHref = tabs.reduce<string | null>((best, t) => {
     const match = pathname === t.href || pathname.startsWith(`${t.href}/`);
     if (match && t.href.length > (best?.length ?? 0)) return t.href;
     return best;
   }, null);
+
+  if (tabs.length === 0) return null;
 
   return (
     <nav
       className="lg:hidden flex-shrink-0 border-t border-border bg-surface flex pb-[env(safe-area-inset-bottom)]"
       aria-label="Staff navigation"
     >
-      {TABS.map((t) => {
+      {tabs.map((t) => {
         const Icon = t.icon;
         const active = activeHref === t.href;
         return (
