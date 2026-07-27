@@ -557,6 +557,66 @@ export async function searchProducts(
   return hits;
 }
 
+/** Lightweight product shape for the admin category picker. A subset of
+ *  {@link ProductSearchHit} — enough to render a row and assign a category. */
+export interface CategoryPickerProduct {
+  id: string;
+  slug: string;
+  name: string;
+  brand: string;
+  imageUrl: string;
+  priceKobo: number;
+  saleKobo: number | null;
+  saleActive: boolean;
+  category: string;
+  categoryName: string;
+}
+
+/**
+ * Recent products for the "add products to a category" picker's browse mode.
+ * When `notInCategorySlug` is set, products already in that category are
+ * excluded so the admin only sees candidates to add. Archived products are
+ * never returned.
+ */
+export async function browseProductsForCategory(
+  notInCategorySlug: string | undefined,
+  limit = 50,
+): Promise<CategoryPickerProduct[]> {
+  if (!hasDatabase) return [];
+
+  const products = await withRetry(() =>
+    db.product.findMany({
+      where: {
+        archivedAt: null,
+        ...(notInCategorySlug && { category: { slug: { not: notInCategorySlug } } }),
+      },
+      orderBy: { createdAt: "desc" },
+      take: Math.min(Math.max(1, limit), 100),
+      include: {
+        category: true,
+        images: { orderBy: [{ isPrimary: "desc" }, { position: "asc" }], take: 1 },
+      },
+    }),
+  );
+
+  return products.map((p) => {
+    const key = p.images[0]?.key;
+    const imageUrl = (key ? publicUrlForKey(key) : null) ?? defaultImageFor(p.slug);
+    return {
+      id: p.id,
+      slug: p.slug,
+      name: p.name,
+      brand: p.brand,
+      imageUrl,
+      priceKobo: Number(p.priceKobo),
+      saleKobo: p.saleKobo != null ? Number(p.saleKobo) : null,
+      saleActive: p.saleActive,
+      category: p.category.slug,
+      categoryName: p.category.name,
+    };
+  });
+}
+
 /** Run the OR search over the given terms and rank the hits. Shared by the
  *  normal search and the fuzzy-corrected retry. */
 async function queryProductHits(

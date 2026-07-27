@@ -24,6 +24,7 @@ const RULES: { test: (p: string) => boolean; perm: PermissionKey }[] = [
   { test: (p) => p.startsWith("/admin/orders"), perm: "orders.view" },
   { test: (p) => p === "/admin/products/new", perm: "products.create" },
   { test: (p) => p.startsWith("/admin/products"), perm: "products.view" },
+  { test: (p) => p.startsWith("/admin/categories"), perm: "products.view" },
   { test: (p) => p.startsWith("/admin/customers"), perm: "customers.view" },
   { test: (p) => p === "/admin/returns/new", perm: "returns.create" },
   { test: (p) => p.startsWith("/admin/returns"), perm: "returns.view" },
