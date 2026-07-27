@@ -70,7 +70,13 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  return NextResponse.next();
+  // Middleware (edge) can't resolve dynamic-role permissions (they live in the
+  // DB), so it only proves the session is valid. Forward the requested path so
+  // the admin layout — running on Node with DB access — can enforce the
+  // per-section permission. See src/lib/admin-access.ts + (admin)/layout.tsx.
+  const headers = new Headers(req.headers);
+  headers.set("x-admin-path", pathname);
+  return NextResponse.next({ request: { headers } });
 }
 
 export const config = {

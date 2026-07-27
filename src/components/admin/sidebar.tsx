@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdminNav } from "@/stores/admin-nav-store";
+import { permissionForPath } from "@/lib/admin-access";
 
 interface NavItem {
   href: string;
@@ -105,6 +106,22 @@ export function AdminSidebar() {
 
 function SidebarBody() {
   const pathname = usePathname();
+  const { data: session } = useSession();
+  const perms = session?.user?.permissions;
+
+  // Only show a nav item the staff member's role can actually open. This mirrors
+  // the server-side guard (same permissionForPath map), so nav visibility and
+  // real access stay in lock-step. While the session is still loading (perms
+  // undefined) show everything to avoid a flash of an empty rail — the server
+  // guard is the authoritative gate regardless.
+  const canSee = (item: NavItem) => {
+    const required = permissionForPath(item.href);
+    if (!required || !perms) return true;
+    return perms.includes(required);
+  };
+  const primary = NAV.filter(canSee);
+  const secondary = SECONDARY.filter(canSee);
+
   const isActive = (item: NavItem) =>
     item.exact ? pathname === item.href : pathname.startsWith(item.href);
 
@@ -127,15 +144,17 @@ function SidebarBody() {
 
       {/* Primary nav */}
       <nav className="flex-1 px-2.5 flex flex-col gap-0.5 overflow-y-auto">
-        {NAV.map((item) => (
+        {primary.map((item) => (
           <NavLink key={item.href} item={item} active={isActive(item)} />
         ))}
 
-        <div className="border-t border-border mt-3 pt-3">
-          {SECONDARY.map((item) => (
-            <NavLink key={item.href} item={item} active={isActive(item)} />
-          ))}
-        </div>
+        {secondary.length > 0 && (
+          <div className="border-t border-border mt-3 pt-3">
+            {secondary.map((item) => (
+              <NavLink key={item.href} item={item} active={isActive(item)} />
+            ))}
+          </div>
+        )}
       </nav>
 
       {/* User pill */}
