@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Plus,
   Download,
@@ -28,6 +28,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { SavedViewBar, type SavedView } from "@/components/ui/saved-view-bar";
 import { FilterBar, type FilterConfig } from "@/components/ui/filter-bar";
 import { BulkActionsBar } from "@/components/ui/bulk-actions-bar";
+import { Pagination } from "@/components/ui/pagination";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -76,15 +77,38 @@ const BULK_STATUS_FLOW = [
 
 interface Props {
   orders: OrderListRow[];
-  totals: { weekCount: number; weekRevenueLabel: string };
+  /** Orders matching the active filters (drives the pager). */
+  total: number;
+  page: number;
+  pageSize: number;
+  statusCounts: Record<string, number>;
+  allCount: number;
+  filters: { status: string; payment: string[]; source: string[]; search: string };
 }
 
-export function OrdersListClient({ orders, totals }: Props) {
+export function OrdersListClient({
+  orders,
+  total,
+  page,
+  pageSize,
+  statusCounts,
+  allCount,
+  filters,
+}: Props) {
   const router = useRouter();
-  const [view, setView] = React.useState<string>("all");
-  const [search, setSearch] = React.useState("");
-  const [paymentValues, setPaymentValues] = React.useState<string[]>([]);
-  const [sourceValues, setSourceValues] = React.useState<string[]>([]);
+  const searchParams = useSearchParams();
+
+  // Filter state lives in the URL (server-driven); these mirror the current
+  // query so the controls stay in sync.
+  const view = filters.status || "all";
+  const paymentValues = filters.payment;
+  const sourceValues = filters.source;
+
+  // Local, debounced mirror of the search term so typing is instant but only
+  // re-queries the server after a short pause.
+  const [search, setSearch] = React.useState(filters.search);
+  React.useEffect(() => setSearch(filters.search), [filters.search]);
+
   const [rowSelection, setRowSelection] = React.useState({});
   const [cancelTarget, setCancelTarget] = React.useState<OrderListRow | null>(null);
   const [cancelLoading, setCancelLoading] = React.useState(false);
@@ -93,13 +117,43 @@ export function OrdersListClient({ orders, totals }: Props) {
   const [bulkStatusValue, setBulkStatusValue] = React.useState<string>("");
   const [bulkStatusLoading, setBulkStatusLoading] = React.useState(false);
 
-  const filters: FilterConfig[] = [
+  // Write filter/page state to the URL; the (force-dynamic) server page then
+  // re-renders with a fresh batch of rows. Filter changes reset to page 1;
+  // explicit page changes keep the rest of the query.
+  const setParams = React.useCallback(
+    (next: Record<string, string | string[] | null>, resetPage = true) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (resetPage) params.delete("page");
+      for (const [key, val] of Object.entries(next)) {
+        params.delete(key);
+        if (Array.isArray(val)) {
+          if (val.length > 0) params.set(key, val.join(","));
+        } else if (val) {
+          params.set(key, val);
+        }
+      }
+      // Clear the selection when the underlying set changes.
+      setRowSelection({});
+      const qs = params.toString();
+      router.push(qs ? `/admin/orders?${qs}` : "/admin/orders");
+    },
+    [router, searchParams],
+  );
+
+  // Debounce the search box → URL.
+  React.useEffect(() => {
+    if (search === filters.search) return;
+    const t = setTimeout(() => setParams({ q: search || null }), 350);
+    return () => clearTimeout(t);
+  }, [search, filters.search, setParams]);
+
+  const filterConfigs: FilterConfig[] = [
     { id: "payment", label: "Payment", values: paymentValues, options: PAYMENT_OPTIONS, multi: true },
     { id: "source", label: "Source", values: sourceValues, options: SOURCE_OPTIONS, multi: true },
   ];
 
-  // Order-status quick filters — "All" plus one tab per status, each with a
-  // live count. Selecting one filters the table (see `filtered` below).
+  // Order-status quick filters — "All" plus one tab per status. Counts come
+  // from the server, spanning the whole matching set (not just this page).
   const savedViews: SavedView[] = React.useMemo(() => {
     const STATUSES = [
       { id: "pending", label: "Pending" },
@@ -111,32 +165,13 @@ export function OrdersListClient({ orders, totals }: Props) {
       { id: "refunded", label: "Refunded" },
     ];
     return [
-      { id: "all", label: "All", count: orders.length },
-      ...STATUSES.map((s) => ({
-        id: s.id,
-        label: s.label,
-        count: orders.filter((o) => o.status === s.id).length,
-      })),
+      { id: "all", label: "All", count: allCount },
+      ...STATUSES.map((s) => ({ id: s.id, label: s.label, count: statusCounts[s.id] ?? 0 })),
     ];
-  }, [orders]);
+  }, [statusCounts, allCount]);
 
-  const filtered = React.useMemo(() => {
-    return orders.filter((o) => {
-      if (
-        search &&
-        ![o.number, o.customerName, o.customerPhone]
-          .join(" ")
-          .toLowerCase()
-          .includes(search.toLowerCase())
-      ) {
-        return false;
-      }
-      if (view !== "all" && o.status !== view) return false;
-      if (paymentValues.length > 0 && !paymentValues.includes(o.payment)) return false;
-      if (sourceValues.length > 0 && !sourceValues.includes(o.source)) return false;
-      return true;
-    });
-  }, [orders, search, view, paymentValues, sourceValues]);
+  // Server already filtered + paginated — render the batch as-is.
+  const filtered = orders;
 
   const selectedCount = Object.values(rowSelection).filter(Boolean).length;
   const selectedNumbers = React.useMemo(
@@ -422,7 +457,11 @@ export function OrdersListClient({ orders, totals }: Props) {
         <div className="p-6 max-w-[1400px] mx-auto">
           <PageHeader
             title="Orders"
-            subtitle={`${totals.weekCount} orders this week · ${totals.weekRevenueLabel}`}
+            subtitle={`${total.toLocaleString()} order${total === 1 ? "" : "s"}${
+              view !== "all" || paymentValues.length || sourceValues.length || filters.search
+                ? " matching"
+                : ""
+            }`}
             actions={
               <>
                 <a href="/api/v1/admin/orders/export" download>
@@ -442,7 +481,7 @@ export function OrdersListClient({ orders, totals }: Props) {
           <SavedViewBar
             views={savedViews}
             activeId={view}
-            onChange={setView}
+            onChange={(id) => setParams({ status: id === "all" ? null : id })}
             className="mb-4"
           />
 
@@ -450,22 +489,20 @@ export function OrdersListClient({ orders, totals }: Props) {
             search={search}
             onSearchChange={setSearch}
             searchPlaceholder="Order #, customer, phone…"
-            filters={filters}
+            filters={filterConfigs}
             onFilterChange={(id, values) => {
-              if (id === "payment") setPaymentValues(values);
-              if (id === "source") setSourceValues(values);
+              if (id === "payment") setParams({ payment: values });
+              if (id === "source") setParams({ source: values });
             }}
-            onClear={() => {
-              setPaymentValues([]);
-              setSourceValues([]);
-              setView("all");
-            }}
+            onClear={() => setParams({ payment: null, source: null, status: null, q: null })}
             className="mb-4"
           />
 
           <DataTable
             columns={columns}
             data={filtered}
+            pageSize={pageSize}
+            hidePagination
             enableSelection
             rowSelection={rowSelection}
             onRowSelectionChange={setRowSelection}
@@ -495,6 +532,16 @@ export function OrdersListClient({ orders, totals }: Props) {
               />
             )}
           />
+
+          {total > pageSize && (
+            <Pagination
+              page={page}
+              total={total}
+              perPage={pageSize}
+              onChange={(p) => setParams({ page: String(p) }, false)}
+              className="mt-4"
+            />
+          )}
         </div>
       </div>
 
