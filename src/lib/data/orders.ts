@@ -4,6 +4,12 @@
 
 import "server-only";
 
+import { Prisma } from "@prisma/client";
+import type {
+  OrderStatus as DbOrderStatus,
+  PaymentStatus as DbPaymentStatus,
+  OrderSource as DbOrderSource,
+} from "@prisma/client";
 import { db, hasDatabase } from "@/lib/db";
 import { type OrderListRow } from "@/lib/admin-mock-data";
 import { SEED_PRODUCT_IMAGE_BY_SLUG } from "@/lib/seed-product-images";
@@ -108,6 +114,50 @@ function mapDbPaymentStatusToView(s: string): PaymentStatus {
 
 // ─── Admin list ───────────────────────────────────────────────────────────
 
+/** Shared relation payload for admin order rows — one place so the paginated
+ *  and unpaginated queries return identically-shaped rows. */
+const ADMIN_ORDER_INCLUDE = {
+  customer: { select: { name: true, phone: true, email: true } },
+  lines: { select: { id: true } },
+  createdBy: { select: { name: true } },
+  returns: {
+    where: { status: { not: "rejected" } },
+    select: { fullyReturned: true },
+  },
+} satisfies Prisma.OrderInclude;
+
+type AdminOrderRow = Prisma.OrderGetPayload<{ include: typeof ADMIN_ORDER_INCLUDE }>;
+
+function toOrderListRow(o: AdminOrderRow): OrderListRow {
+  const total = Number(o.totalKobo);
+  const paid = Number(o.paidKobo);
+  return {
+    number: o.number,
+    customerName: o.customer?.name ?? o.shipName,
+    customerPhone: o.customer?.phone ?? o.shipPhone,
+    customerEmail: o.customer?.email ?? null,
+    items: o.lines.length,
+    totalKobo: total,
+    outstandingKobo: total - paid,
+    payment: mapDbPaymentStatusToView(o.paymentStatus),
+    status: mapDbStatusToView(o.status),
+    source: o.source as OrderListRow["source"],
+    createdAt: formatTimestamp(o.createdAt),
+    createdBy: o.createdBy?.name ?? "Self-serve",
+    returnState:
+      o.returns.length === 0
+        ? "none"
+        : o.returns.some((r) => r.fullyReturned)
+          ? "full"
+          : "partial",
+  };
+}
+
+/**
+ * Unpaginated recent orders (newest 200). Used by the dashboard and the
+ * customer-detail page (which filters down to one customer). The main orders
+ * list uses {@link listAdminOrdersPage} instead so it can reach every order.
+ */
 export async function listAdminOrders(storeId?: string | null): Promise<OrderListRow[]> {
   if (!hasDatabase) {
     return [];
@@ -117,41 +167,96 @@ export async function listAdminOrders(storeId?: string | null): Promise<OrderLis
     ...(storeId ? { where: { storeId } } : {}),
     orderBy: { createdAt: "desc" },
     take: 200,
-    include: {
-      customer: { select: { name: true, phone: true, email: true } },
-      lines: { select: { id: true } },
-      createdBy: { select: { name: true } },
-      returns: {
-        where: { status: { not: "rejected" } },
-        select: { fullyReturned: true },
-      },
-    },
+    include: ADMIN_ORDER_INCLUDE,
   });
 
-  return rows.map((o) => {
-    const total = Number(o.totalKobo);
-    const paid = Number(o.paidKobo);
-    return {
-      number: o.number,
-      customerName: o.customer?.name ?? o.shipName,
-      customerPhone: o.customer?.phone ?? o.shipPhone,
-      customerEmail: o.customer?.email ?? null,
-      items: o.lines.length,
-      totalKobo: total,
-      outstandingKobo: total - paid,
-      payment: mapDbPaymentStatusToView(o.paymentStatus),
-      status: mapDbStatusToView(o.status),
-      source: o.source as OrderListRow["source"],
-      createdAt: formatTimestamp(o.createdAt),
-      createdBy: o.createdBy?.name ?? "Self-serve",
-      returnState:
-        o.returns.length === 0
-          ? ("none" as const)
-          : o.returns.some((r) => r.fullyReturned)
-            ? ("full" as const)
-            : ("partial" as const),
-    };
-  });
+  return rows.map(toOrderListRow);
+}
+
+export interface AdminOrdersPage {
+  rows: OrderListRow[];
+  /** Orders matching the active filters (incl. status) — drives pagination. */
+  total: number;
+  /** Per-status counts within the non-status filters — drives the status tabs. */
+  statusCounts: Record<string, number>;
+  /** Total across the non-status filters — the "All" tab count. */
+  allCount: number;
+}
+
+/**
+ * Server-side paginated + filtered admin orders. One page of rows is fetched at
+ * a time (never the whole table), so the list scales to any order volume and
+ * can reach the very first order. Status-tab counts are computed across the
+ * whole matching set (minus the status filter) so they stay meaningful while
+ * paging.
+ */
+export async function listAdminOrdersPage(opts: {
+  storeId?: string | null;
+  page: number;
+  pageSize: number;
+  status?: string | null;
+  payment?: string[];
+  source?: string[];
+  search?: string | null;
+}): Promise<AdminOrdersPage> {
+  if (!hasDatabase) {
+    return { rows: [], total: 0, statusCounts: {}, allCount: 0 };
+  }
+
+  const page = Math.max(1, opts.page || 1);
+  const pageSize = Math.min(Math.max(1, opts.pageSize || 25), 100);
+  const q = opts.search?.trim();
+
+  // Filters shared by the page query and the status-tab counts (everything
+  // EXCEPT the status filter, so each tab shows its own total).
+  const baseWhere: Prisma.OrderWhereInput = {
+    ...(opts.storeId ? { storeId: opts.storeId } : {}),
+    ...(opts.payment && opts.payment.length > 0
+      ? { paymentStatus: { in: opts.payment as DbPaymentStatus[] } }
+      : {}),
+    ...(opts.source && opts.source.length > 0
+      ? { source: { in: opts.source as DbOrderSource[] } }
+      : {}),
+    ...(q && q.length >= 1
+      ? {
+          OR: [
+            { number: { contains: q, mode: "insensitive" } },
+            { shipName: { contains: q, mode: "insensitive" } },
+            { shipPhone: { contains: q } },
+            { customer: { name: { contains: q, mode: "insensitive" } } },
+            { customer: { phone: { contains: q } } },
+          ],
+        }
+      : {}),
+  };
+
+  const statusWhere: Prisma.OrderWhereInput = {
+    ...baseWhere,
+    ...(opts.status && opts.status !== "all"
+      ? { status: opts.status as DbOrderStatus }
+      : {}),
+  };
+
+  const [rows, total, grouped] = await Promise.all([
+    db.order.findMany({
+      where: statusWhere,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      include: ADMIN_ORDER_INCLUDE,
+    }),
+    db.order.count({ where: statusWhere }),
+    db.order.groupBy({ by: ["status"], where: baseWhere, _count: { _all: true } }),
+  ]);
+
+  const statusCounts: Record<string, number> = {};
+  let allCount = 0;
+  for (const g of grouped) {
+    statusCounts[g.status] = g._count._all;
+    allCount += g._count._all;
+  }
+
+  return { rows: rows.map(toOrderListRow), total, statusCounts, allCount };
 }
 
 function formatTimestamp(d: Date): string {

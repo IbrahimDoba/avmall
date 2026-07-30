@@ -208,7 +208,7 @@ export default async function AdminDashboardPage({
                     title="Partially paid"
                     sub={`${formatMoney(data.queue.partiallyPaidOutstandingKobo)} outstanding`}
                     count={data.queue.partiallyPaid}
-                    href="/admin/orders"
+                    href="/admin/orders?payment=partial"
                   />
                 )}
                 {data.queue.returnsPending > 0 && (
