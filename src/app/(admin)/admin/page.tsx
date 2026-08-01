@@ -19,6 +19,7 @@ import { Money } from "@/components/ui/money";
 import { OrderStatusPill, PaymentStatusPill } from "@/components/ui/status-pill";
 import { LineChart, DonutChart } from "@/components/ui/charts";
 import { getDashboard, getBusinessOverview, type DashboardData } from "@/lib/data/dashboard";
+import { getProfitAnalysis } from "@/lib/data/profit";
 import { BusinessOverviewSection } from "@/components/admin/business-overview";
 import { getActiveAdminStore } from "@/lib/store";
 import { storefrontPathForStore } from "@/lib/store-constants";
@@ -60,10 +61,13 @@ export default async function AdminDashboardPage({
     from: new Date(Date.UTC(bizYear, 0, 1)),
     to: new Date(Date.UTC(bizYear + 1, 0, 1)),
   };
-  const [data, revenue, overview] = await Promise.all([
+  const [data, revenue, overview, yearProfit] = await Promise.all([
     getDashboard(revenueReportArg(resolved), storeId),
     getRevenueReport(revenueReportArg(resolved), storeId),
     getBusinessOverview(yearRange, storeId),
+    // Year-scoped P&L so the overview widget can show net profit after
+    // expenses — same source as the Profit Analysis page, so numbers agree.
+    getProfitAnalysis(yearRange, storeId),
   ]);
   const revenueLabel = resolved.isCustom
     ? `${fmtDay(revenue.from)} – ${fmtDay(revenue.to)}`
@@ -122,7 +126,15 @@ export default async function AdminDashboardPage({
             }
           />
 
-          <BusinessOverviewSection data={overview} rangeLabel={`This year · ${bizYear}`} />
+          <BusinessOverviewSection
+            data={overview}
+            rangeLabel={`This year · ${bizYear}`}
+            profit={{
+              grossProfitKobo: yearProfit.grossProfitKobo,
+              expensesKobo: yearProfit.expensesKobo,
+              netProfitKobo: yearProfit.netProfitKobo,
+            }}
+          />
 
           {/* KPI strip */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 mb-5">

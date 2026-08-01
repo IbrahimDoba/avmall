@@ -21,9 +21,12 @@ const CHANNEL_COLORS: Record<string, string> = {
 export function BusinessOverviewSection({
   data,
   rangeLabel,
+  profit,
 }: {
   data: BusinessOverview;
   rangeLabel: string;
+  /** Year-scoped profitability — same P&L source as the Profit Analysis page. */
+  profit?: { grossProfitKobo: number; expensesKobo: number; netProfitKobo: number };
 }) {
   return (
     <div className="grid lg:grid-cols-[1.7fr_1fr] gap-3.5 mb-5">
@@ -75,6 +78,16 @@ export function BusinessOverviewSection({
             <Total label="Total Settled" value={data.settledKobo} />
             <Total label="Total Owed" value={data.owedKobo} />
           </div>
+
+          {/* Profitability — all profits, minus expenses = net profit. Same P&L
+              chain as the Profit Analysis page. */}
+          {profit && (
+            <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-border">
+              <Total label="Gross Profit" value={profit.grossProfitKobo} sub="sales − cost of goods" />
+              <Total label="Expenses" value={profit.expensesKobo} sub="operating costs" tone="warn" />
+              <Total label="Net Profit" value={profit.netProfitKobo} sub="after expenses" signed />
+            </div>
+          )}
 
           {/* Monthly online vs offline */}
           <div className="mt-6">
@@ -136,11 +149,31 @@ function Kpi({
   );
 }
 
-function Total({ label, value, sub }: { label: string; value: number; sub?: string }) {
+function Total({
+  label,
+  value,
+  sub,
+  tone,
+  signed,
+}: {
+  label: string;
+  value: number;
+  sub?: string;
+  tone?: "warn";
+  /** Colour by sign — green when >= 0, red when negative (for net profit). */
+  signed?: boolean;
+}) {
+  const color = signed
+    ? value < 0
+      ? "text-danger"
+      : "text-success"
+    : tone === "warn"
+      ? "text-warning"
+      : "text-fg";
   return (
     <div className="min-w-0">
       <div className="text-[10px] font-bold uppercase tracking-wider text-fg-muted">{label}</div>
-      <div className="text-xl font-bold tracking-tight mt-1 tabular truncate" title={formatMoney(value)}>
+      <div className={`text-xl font-bold tracking-tight mt-1 tabular truncate ${color}`} title={formatMoney(value)}>
         {formatMoney(value)}
       </div>
       {sub && <div className="text-[10px] text-fg-subtle mt-0.5">{sub}</div>}
