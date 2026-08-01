@@ -488,7 +488,7 @@ export function OrdersListClient({
           <FilterBar
             search={search}
             onSearchChange={setSearch}
-            searchPlaceholder="Order #, customer, phone…"
+            searchPlaceholder="Order #, customer, phone, product…"
             filters={filterConfigs}
             onFilterChange={(id, values) => {
               if (id === "payment") setParams({ payment: values });

@@ -225,6 +225,10 @@ export async function listAdminOrdersPage(opts: {
             { shipPhone: { contains: q } },
             { customer: { name: { contains: q, mode: "insensitive" } } },
             { customer: { phone: { contains: q } } },
+            // Match by product in the order — e.g. searching "fan" surfaces every
+            // order containing a fan, so staff don't need the order number.
+            { lines: { some: { nameSnapshot: { contains: q, mode: "insensitive" } } } },
+            { lines: { some: { skuSnapshot: { contains: q, mode: "insensitive" } } } },
           ],
         }
       : {}),
