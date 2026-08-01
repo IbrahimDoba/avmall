@@ -2,11 +2,14 @@ import { AdminTopBar } from "@/components/admin/topbar";
 import { PageHeader } from "@/components/admin/page-header";
 import { RevenueRangePicker } from "@/components/admin/revenue-range-picker";
 import { ProfitInsights } from "@/components/admin/profit-insights";
+import { Button } from "@/components/ui/button";
 import { getProfitAnalysis, type ProfitAnalysis } from "@/lib/data/profit";
 import { resolveRevenueRange, revenueReportArg } from "@/lib/data/reports";
 import { getActiveAdminStoreId } from "@/lib/store";
+import { getStaffSession } from "@/lib/auth";
+import { hasPermission } from "@/lib/permissions";
 import { formatMoney } from "@/lib/money";
-import { AlertTriangle, PackageX, Boxes, TrendingDown } from "lucide-react";
+import { AlertTriangle, PackageX, Boxes, TrendingDown, Download } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +28,18 @@ export default async function ProfitAnalysisPage({
   const insightQuery = resolved.isCustom ? { from: resolved.from, to: resolved.to } : { range: resolved.presetRange };
   const periodLabel = `${fmtDay(a.from)} – ${fmtDay(a.to)}`;
 
+  // Downloads carry the same range as the on-screen view, and need reports.export.
+  const exportQs = resolved.isCustom
+    ? `from=${resolved.from}&to=${resolved.to}`
+    : `range=${resolved.presetRange}`;
+  const session = await getStaffSession();
+  const canExport =
+    !!session?.user &&
+    hasPermission(
+      { role: session.user.role, permissions: session.user.permissions },
+      "reports.export",
+    );
+
   return (
     <>
       <AdminTopBar breadcrumbs={[{ label: "Profit Analysis" }]} />
@@ -34,12 +49,21 @@ export default async function ProfitAnalysisPage({
             title="Profit Analysis"
             subtitle={`Selling price − cost − discounts − expenses · ${periodLabel}`}
             actions={
-              <RevenueRangePicker
-                basePath="/admin/ai"
-                activeRange={resolved.isCustom ? null : resolved.presetRange}
-                from={resolved.from}
-                to={resolved.to}
-              />
+              <div className="flex items-center gap-2">
+                {canExport && (
+                  <a href={`/api/v1/admin/profit/export?${exportQs}`}>
+                    <Button variant="secondary" size="sm">
+                      <Download className="size-3.5" /> Download CSV
+                    </Button>
+                  </a>
+                )}
+                <RevenueRangePicker
+                  basePath="/admin/ai"
+                  activeRange={resolved.isCustom ? null : resolved.presetRange}
+                  from={resolved.from}
+                  to={resolved.to}
+                />
+              </div>
             }
           />
 
