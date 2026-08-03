@@ -91,6 +91,9 @@ function productFromDb(p: DbProductWith): Product {
     createdAt: p.createdAt.toISOString(),
     updatedAt: p.updatedAt.toISOString(),
     short: p.shortDesc,
+    longDesc: p.longDesc,
+    tags: p.tags,
+    secondaryCategorySlugs: p.secondaryCategorySlugs,
     mark: p.brand[0]?.toUpperCase() ?? "A",
     category: "home", // overwritten by withCategorySlug() below
     imageUrl: primaryR2Url ?? defaultImageFor(p.slug),
@@ -302,7 +305,18 @@ export async function listProducts(opts?: {
     ...(opts?.storeId && { storeId: opts.storeId }),
     ...(!opts?.includeUnpublished && { archivedAt: null, published: true }),
     ...(opts?.featuredOnly && { featured: true }),
-    ...(opts?.category && { category: { slug: opts.category } }),
+    // Match the primary category OR any secondary category the product is
+    // tagged into. AND-wrapped so it never collides with the search `OR` below.
+    ...(opts?.category && {
+      AND: [
+        {
+          OR: [
+            { category: { slug: opts.category } },
+            { secondaryCategorySlugs: { has: opts.category } },
+          ],
+        },
+      ],
+    }),
     ...(q && q.length >= 2 && {
       OR: [
         { name: { contains: q, mode: "insensitive" as const } },

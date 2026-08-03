@@ -238,6 +238,10 @@ model Product {
   shortDesc          String    @map("short_desc")
   longDesc           String    @default("") @map("long_desc")
   categoryId         String    @map("category_id") @db.Uuid
+  /// Extra categories this product also appears under (Category slugs). The
+  /// primary category stays `categoryId`; this lets one product show in several
+  /// categories without a join table. Slugs are stable across renames.
+  secondaryCategorySlugs String[] @default([]) @map("secondary_category_slugs")
   /// Owning store — products are isolated per store.
   storeId            String    @map("store_id") @db.Uuid
   /// Display tone hex / gradient for the imagery backdrop.

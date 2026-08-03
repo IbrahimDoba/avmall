@@ -8,10 +8,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { requireStaffSession } from "@/lib/auth";
-import { requirePermission } from "@/lib/permissions";
+import { hasPermission } from "@/lib/permissions";
 import { hasOpenAI, openaiChatJSON } from "@/lib/openai";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
-import { AppError, ValidationError } from "@/lib/errors";
+import { AppError, ForbiddenError, ValidationError } from "@/lib/errors";
 
 export const runtime = "nodejs";
 
@@ -24,7 +24,10 @@ const bodySchema = z.object({
 export async function POST(req: NextRequest) {
   try {
     const session = await requireStaffSession();
-    requirePermission(session, "products.create");
+    // Usable when creating a product OR editing an existing one.
+    if (!hasPermission(session, "products.create") && !hasPermission(session, "products.edit")) {
+      throw new ForbiddenError("Missing permission: products.edit");
+    }
 
     if (!hasOpenAI) {
       throw new AppError(
