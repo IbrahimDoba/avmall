@@ -49,6 +49,12 @@ export type Product = {
   createdAt: string;
   updatedAt: string;
   category: ProductCategoryId;
+  /** Extra category slugs this product also appears under (beyond `category`). */
+  secondaryCategorySlugs?: string[];
+  /** Full description (rich text / plain). */
+  longDesc?: string;
+  /** Free-form tags. */
+  tags?: string[];
   /** Primary product image. */
   imageUrl: string;
   /** Optional additional gallery images. */

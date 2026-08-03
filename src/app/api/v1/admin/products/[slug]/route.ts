@@ -26,6 +26,11 @@ const patchSchema = z.object({
   name: z.string().min(1).optional(),
   brand: z.string().min(1).optional(),
   categorySlug: z.string().min(1).optional(),
+  /** Extra category slugs the product also appears under (beyond the primary). */
+  secondaryCategorySlugs: z.array(z.string().min(1)).optional(),
+  /** Variant option axis names (e.g. "Size", "Colour"). Null clears the axis. */
+  option1Name: z.string().min(1).nullable().optional(),
+  option2Name: z.string().min(1).nullable().optional(),
   shortDesc: z.string().optional(),
   longDesc: z.string().optional(),
   themeBg: z.string().nullable().optional(),
@@ -127,6 +132,11 @@ export async function PATCH(
           ...(b.name !== undefined && { name: b.name }),
           ...(b.brand !== undefined && { brand: b.brand }),
           ...(categoryId !== undefined && { categoryId }),
+          ...(b.secondaryCategorySlugs !== undefined && {
+            secondaryCategorySlugs: Array.from(new Set(b.secondaryCategorySlugs)),
+          }),
+          ...(b.option1Name !== undefined && { option1Name: b.option1Name }),
+          ...(b.option2Name !== undefined && { option2Name: b.option2Name }),
           ...(b.shortDesc !== undefined && { shortDesc: b.shortDesc }),
           ...(b.longDesc !== undefined && { longDesc: b.longDesc }),
           ...(b.themeBg !== undefined && { themeBg: b.themeBg }),

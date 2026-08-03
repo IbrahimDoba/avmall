@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Save, Trash2, Eye, Pencil } from "lucide-react";
+import { Save, Trash2, Eye, Pencil, Sparkles } from "lucide-react";
 import { AdminTopBar } from "@/components/admin/topbar";
 import { PageHeader } from "@/components/admin/page-header";
 import { Button } from "@/components/ui/button";
@@ -53,16 +53,22 @@ export function ProductEditorClient({ product, audit, categories, history, activ
   const [name, setName] = React.useState(product.name);
   const [brand, setBrand] = React.useState(product.brand);
   const [category, setCategory] = React.useState(product.category);
-  const [short, setShort] = React.useState(product.short);
-  const [longDesc, setLongDesc] = React.useState(
-    "Crafted in small batches with sustainably-sourced ingredients.",
+  // Extra categories this product also shows under (slugs), minus the primary.
+  const [secondaryCategorySlugs, setSecondaryCategorySlugs] = React.useState<string[]>(
+    (product.secondaryCategorySlugs ?? []).filter((s) => s !== product.category),
   );
+  const [short, setShort] = React.useState(product.short);
+  const [longDesc, setLongDesc] = React.useState(product.longDesc ?? "");
+  // Variant option axis names — editable so existing products can gain variants.
+  const [option1Name, setOption1Name] = React.useState(product.option1Name ?? "");
+  const [option2Name, setOption2Name] = React.useState(product.option2Name ?? "");
+  const [genCopy, setGenCopy] = React.useState(false);
   const [slug, setSlug] = React.useState(product.slug);
   const [priceKobo, setPriceKobo] = React.useState<number | null>(product.price);
   const [saleKobo, setSaleKobo] = React.useState<number | null>(product.sale ?? null);
   const [costKobo, setCostKobo] = React.useState<number | null>(product.cost);
   const [moq, setMoq] = React.useState(product.moq ?? 1);
-  const [tags, setTags] = React.useState<string[]>(["handmade", "zaria"]);
+  const [tags, setTags] = React.useState<string[]>(product.tags ?? []);
   const [preorder, setPreorder] = React.useState(!!product.preorder);
   const [featured, setFeatured] = React.useState(!!product.featured);
   const [published, setPublished] = React.useState(product.published ?? true);
@@ -83,6 +89,40 @@ export function ProductEditorClient({ product, audit, categories, history, activ
   const [negotiateFloorKobo, setNegotiateFloorKobo] = React.useState<number | null>(
     product.negotiateFloor ?? null,
   );
+
+  // AI: (re)generate short/full description + tags from the product name.
+  async function generateCopy() {
+    if (!name.trim()) {
+      toast.error("Enter a product name first.");
+      return;
+    }
+    setGenCopy(true);
+    try {
+      const res = await fetch("/api/v1/admin/products/ai/generate-copy", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          ...(brand.trim() && { brand: brand.trim() }),
+          category,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json?.error?.message ?? "Could not generate copy");
+        return;
+      }
+      const d = json.data ?? {};
+      if (d.shortDesc) setShort(d.shortDesc);
+      if (d.longDesc) setLongDesc(d.longDesc);
+      if (Array.isArray(d.tags) && d.tags.length) setTags(d.tags);
+      toast.success("Generated description, short text & tags");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setGenCopy(false);
+    }
+  }
 
   // Effective AI settle-floor for the current mode + price.
   const negotiationFloorKobo: number | null =
@@ -195,6 +235,11 @@ export function ProductEditorClient({ product, audit, categories, history, activ
                             name,
                             brand,
                             categorySlug: category,
+                            secondaryCategorySlugs: secondaryCategorySlugs.filter(
+                              (s) => s !== category,
+                            ),
+                            option1Name: option1Name.trim() || null,
+                            option2Name: option2Name.trim() || null,
                             shortDesc: short,
                             longDesc,
                             ...(priceKobo != null && { priceKobo }),
@@ -277,6 +322,59 @@ export function ProductEditorClient({ product, audit, categories, history, activ
                       ))}
                     </Select>
                   </Field>
+                  <Field
+                    id="secondary-categories"
+                    label="Also show in (optional)"
+                    className="md:col-span-2"
+                  >
+                    <div className="flex flex-wrap gap-1.5">
+                      {categories
+                        .filter((c) => c.id !== category)
+                        .map((c) => {
+                          const on = secondaryCategorySlugs.includes(c.id);
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() =>
+                                setSecondaryCategorySlugs((prev) =>
+                                  prev.includes(c.id)
+                                    ? prev.filter((s) => s !== c.id)
+                                    : [...prev, c.id],
+                                )
+                              }
+                              className={`rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors ${
+                                on
+                                  ? "border-brand-primary bg-info-bg text-brand-primary"
+                                  : "border-border text-fg-muted hover:border-border-strong"
+                              }`}
+                            >
+                              {c.name}
+                            </button>
+                          );
+                        })}
+                    </div>
+                    <p className="text-[11px] text-fg-muted mt-1.5">
+                      Extra categories this product also appears under, on top of its
+                      main category.
+                    </p>
+                  </Field>
+                  <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-2 px-3 py-2">
+                    <span className="text-xs text-fg-muted inline-flex items-center gap-1.5">
+                      <Sparkles className="size-3.5 text-brand-primary" />
+                      Let AI draft the description, short text &amp; tags from the name.
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      onClick={generateCopy}
+                      disabled={!name.trim() || genCopy}
+                      loading={genCopy}
+                    >
+                      <Sparkles className="size-3.5" /> Generate with AI
+                    </Button>
+                  </div>
                   <Field id="short" label="Short description" className="md:col-span-2">
                     <Input
                       id="short"
@@ -447,6 +545,31 @@ export function ProductEditorClient({ product, audit, categories, history, activ
               </Card>
 
               <Card title="Variants & inventory">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-3 pb-3 border-b border-border">
+                  <Field id="opt1" label="Option 1 name">
+                    <Input
+                      id="opt1"
+                      value={option1Name}
+                      onChange={(e) => setOption1Name(e.target.value)}
+                      placeholder="e.g. Size — blank for none"
+                    />
+                  </Field>
+                  <Field id="opt2" label="Option 2 name">
+                    <Input
+                      id="opt2"
+                      value={option2Name}
+                      onChange={(e) => setOption2Name(e.target.value)}
+                      placeholder="e.g. Colour"
+                    />
+                  </Field>
+                  {(option1Name.trim() !== (product.option1Name ?? "") ||
+                    option2Name.trim() !== (product.option2Name ?? "")) && (
+                    <p className="sm:col-span-2 text-[11px] text-warning">
+                      Save the product to apply these option names, then add
+                      variants with those options below.
+                    </p>
+                  )}
+                </div>
                 <div className="flex flex-col gap-3">
                   {product.variants.map((v) => (
                     <VariantRow

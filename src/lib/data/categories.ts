@@ -29,30 +29,39 @@ export interface AdminCategory {
 export async function listCategoriesAdmin(): Promise<AdminCategory[]> {
   if (!hasDatabase) return [];
 
-  const [cats, published] = await withRetry(() =>
+  // Fetch categories + a thin projection of every product, then count in JS so
+  // a product's SECONDARY categories count too (a product appears in its
+  // primary category and any secondaryCategorySlugs). Cheap at this scale.
+  const [cats, products] = await withRetry(() =>
     Promise.all([
-      db.category.findMany({
-        orderBy: [{ position: "asc" }, { name: "asc" }],
-        include: { _count: { select: { products: true } } },
-      }),
-      db.product.groupBy({
-        by: ["categoryId"],
-        where: { archivedAt: null, published: true },
-        _count: { _all: true },
+      db.category.findMany({ orderBy: [{ position: "asc" }, { name: "asc" }] }),
+      db.product.findMany({
+        select: {
+          categoryId: true,
+          published: true,
+          archivedAt: true,
+          secondaryCategorySlugs: true,
+        },
       }),
     ]),
   );
 
-  const publishedByCategory = new Map(
-    published.map((p) => [p.categoryId, p._count._all]),
-  );
-
-  return cats.map((c) => ({
-    id: c.id,
-    slug: c.slug,
-    name: c.name,
-    position: c.position,
-    totalProducts: c._count.products,
-    publishedProducts: publishedByCategory.get(c.id) ?? 0,
-  }));
+  return cats.map((c) => {
+    let totalProducts = 0;
+    let publishedProducts = 0;
+    for (const p of products) {
+      const inCategory = p.categoryId === c.id || p.secondaryCategorySlugs.includes(c.slug);
+      if (!inCategory) continue;
+      totalProducts += 1;
+      if (p.published && p.archivedAt == null) publishedProducts += 1;
+    }
+    return {
+      id: c.id,
+      slug: c.slug,
+      name: c.name,
+      position: c.position,
+      totalProducts,
+      publishedProducts,
+    };
+  });
 }
