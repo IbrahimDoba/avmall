@@ -23,17 +23,19 @@ import {
 } from "@/lib/errors";
 
 const patchSchema = z.object({
-  name: z.string().min(1).optional(),
-  // Brand may legitimately be empty (many imported products have none), and the
-  // editor sends the whole form on save — so requiring min(1) here blocked ANY
-  // edit to a brandless product (e.g. just changing its sale price). Allow "".
+  // The editor PATCHes the WHOLE form on save, so a strict rule on any field the
+  // operator didn't touch — e.g. an empty brand or name, common on imported
+  // products — would block an unrelated edit like a sale-price change. Text
+  // fields therefore accept "" (the DB columns allow it); an empty categorySlug
+  // simply leaves the category unchanged. Money stays strict.
+  name: z.string().optional(),
   brand: z.string().optional(),
-  categorySlug: z.string().min(1).optional(),
+  categorySlug: z.string().optional(),
   /** Extra category slugs the product also appears under (beyond the primary). */
   secondaryCategorySlugs: z.array(z.string().min(1)).optional(),
   /** Variant option axis names (e.g. "Size", "Colour"). Null clears the axis. */
-  option1Name: z.string().min(1).nullable().optional(),
-  option2Name: z.string().min(1).nullable().optional(),
+  option1Name: z.string().nullable().optional(),
+  option2Name: z.string().nullable().optional(),
   shortDesc: z.string().optional(),
   longDesc: z.string().optional(),
   themeBg: z.string().nullable().optional(),
