@@ -24,7 +24,10 @@ import {
 
 const patchSchema = z.object({
   name: z.string().min(1).optional(),
-  brand: z.string().min(1).optional(),
+  // Brand may legitimately be empty (many imported products have none), and the
+  // editor sends the whole form on save — so requiring min(1) here blocked ANY
+  // edit to a brandless product (e.g. just changing its sale price). Allow "".
+  brand: z.string().optional(),
   categorySlug: z.string().min(1).optional(),
   /** Extra category slugs the product also appears under (beyond the primary). */
   secondaryCategorySlugs: z.array(z.string().min(1)).optional(),
