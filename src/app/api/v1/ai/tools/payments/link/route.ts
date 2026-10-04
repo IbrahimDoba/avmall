@@ -13,7 +13,8 @@
  * Body:
  *   {
  *     orderNumber: string,
- *     amountKobo?: number,   // defaults to the outstanding balance
+ *     amount?: number|string, // Naira; defaults to the outstanding balance
+ *     amountKobo?: number,    // legacy: same, in kobo
  *     method?: "nuqood" | "bank_transfer",   // default "nuqood"
  *   }
  *
@@ -30,6 +31,7 @@ import { requireAiAgent } from "@/lib/ai-auth";
 import { writeAudit } from "@/lib/audit";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { formatMoney } from "@/lib/money";
+import { nairaInput } from "@/lib/ai/naira-input";
 import { env } from "@/lib/env";
 import { SITE } from "@/lib/site";
 import { createDynamicAccount, nuqoodConfigured } from "@/lib/nuqood";
@@ -44,6 +46,9 @@ export const runtime = "nodejs";
 
 const bodySchema = z.object({
   orderNumber: z.string().min(1),
+  /** Naira to collect — what the agent should send. Defaults to the balance. */
+  amount: nairaInput.optional(),
+  /** Legacy: same, in kobo. */
   amountKobo: z.number().int().positive().optional(),
   method: z.enum(["nuqood", "bank_transfer"]).default("nuqood"),
 });
@@ -83,10 +88,10 @@ export async function POST(req: NextRequest) {
     if (outstandingKobo <= 0) {
       throw new ConflictError("Order is fully paid — no payment due");
     }
-    const amountKobo = parsed.data.amountKobo ?? outstandingKobo;
+    const amountKobo = parsed.data.amount ?? parsed.data.amountKobo ?? outstandingKobo;
     if (amountKobo > outstandingKobo) {
       throw new ValidationError({
-        amountKobo: `Cannot collect more than the outstanding balance (₦${outstandingKobo / 100}).`,
+        amount: `Cannot collect more than the outstanding balance (${formatMoney(outstandingKobo)}).`,
       });
     }
 

@@ -43,7 +43,14 @@ export async function GET(req: NextRequest) {
       const seed = await getProductBySlug(relatedTo);
       if (!seed) {
         return NextResponse.json(
-          apiSuccess({ basis: "related", seed: relatedTo, count: 0, products: [] }),
+          apiSuccess({
+            basis: "related",
+            seed: relatedTo,
+            found: false,
+            count: 0,
+            message: `No product with slug "${relatedTo}". Use a slug exactly as search_products returned it.`,
+            products: [],
+          }),
         );
       }
       const related = await getRelatedProducts(seed, limit);
@@ -61,7 +68,11 @@ export async function GET(req: NextRequest) {
         basis: relatedTo ? "related" : category ? "category" : "featured",
         ...(relatedTo && { seed: relatedTo }),
         ...(category && { category }),
+        found: products.length > 0,
         count: products.length,
+        ...(products.length === 0 && {
+          message: "No products to recommend here. Do not invent any; try search_products instead.",
+        }),
         products: products.map((p) => ({
           id: p.id,
           slug: p.slug,

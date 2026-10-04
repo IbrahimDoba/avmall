@@ -17,7 +17,8 @@
  * Body:
  *   {
  *     productSlug: string,
- *     offerKobo: number,         // what the customer is willing to pay (per unit)
+ *     offer: number | string,    // Naira the customer will pay per unit ("₦4,500" ok)
+ *     offerKobo?: number,        // legacy: same, in kobo
  *     quantity?: number,         // default 1; only affects retail base when sale priced
  *   }
  *
@@ -48,12 +49,16 @@ import { db, hasDatabase } from "@/lib/db";
 import { applyPercentageDiscount, formatMoney } from "@/lib/money";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { AppError, NotFoundError, ValidationError } from "@/lib/errors";
+import { nairaInput } from "@/lib/ai/naira-input";
 
 export const runtime = "nodejs";
 
 const bodySchema = z.object({
   productSlug: z.string().min(1),
-  offerKobo: z.number().int().positive(),
+  /** Per-unit offer in Naira — what the agent should send. */
+  offer: nairaInput.optional(),
+  /** Legacy: per-unit offer in kobo. */
+  offerKobo: z.number().int().positive().optional(),
   quantity: z.number().int().positive().optional(),
 });
 
@@ -72,7 +77,11 @@ export async function POST(req: NextRequest) {
         [issue?.path.join(".") ?? "body"]: issue?.message ?? "Invalid",
       });
     }
-    const { productSlug, offerKobo } = parsed.data;
+    const { productSlug } = parsed.data;
+    const offerKobo = parsed.data.offer ?? parsed.data.offerKobo;
+    if (offerKobo === undefined) {
+      throw new ValidationError({ offer: "The customer's offer per unit, in Naira, is required" });
+    }
 
     const product = await db.product.findUnique({
       where: { slug: productSlug },

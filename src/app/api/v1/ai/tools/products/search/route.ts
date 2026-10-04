@@ -80,11 +80,25 @@ export async function GET(req: NextRequest) {
       }));
     }
 
+    // Dailzero feeds this body to the model verbatim, and a bare `count: 0`
+    // next to an empty array is easy to misread as "we have it". Say it in
+    // words, and do the same when everything that matched is out of stock.
+    const inStockCount = products.filter((p) => p.inStock).length;
+    const message =
+      products.length === 0
+        ? `No products matched "${q}". We do not have this in our catalogue. Tell the customer plainly, suggest another word or brand, or call list_categories. Do NOT say it is available.`
+        : inStockCount === 0
+          ? "Every product that matched is OUT OF STOCK. Do not offer them as available. Say so, and offer close alternatives (recommend_products) or to notify them when it is back."
+          : undefined;
+
     return NextResponse.json(
       apiSuccess({
         query: q,
         ...(category && { category }),
+        found: products.length > 0,
         count: products.length,
+        inStockCount,
+        ...(message && { message }),
         products,
       }),
     );
