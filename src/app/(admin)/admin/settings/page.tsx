@@ -4,6 +4,9 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { AdminTopBar } from "@/components/admin/topbar";
 import { PageHeader } from "@/components/admin/page-header";
+import { AiToolsSync } from "@/components/admin/ai-tools-sync";
+import { getStaffSession } from "@/lib/auth";
+import { hasPermission } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +16,15 @@ const QUICK_LINKS = [
   { icon: User, label: "Your profile", desc: "Display name, change password", href: "/admin/profile" },
 ];
 
-export default function AdminSettingsPage() {
+export default async function AdminSettingsPage() {
+  const session = await getStaffSession();
+  const canManageAi =
+    !!session?.user &&
+    hasPermission(
+      { role: session.user.role, permissions: session.user.permissions },
+      "ai.settings",
+    );
+
   return (
     <>
       <AdminTopBar breadcrumbs={[{ label: "Settings" }]} />
@@ -25,6 +36,12 @@ export default function AdminSettingsPage() {
           />
 
           <SettingsClient />
+
+          {canManageAi && (
+            <div className="mt-6">
+              <AiToolsSync />
+            </div>
+          )}
 
           <h2 className="text-[11px] font-bold uppercase tracking-widest text-fg-muted mt-10 mb-3">
             Other settings

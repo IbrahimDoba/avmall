@@ -1,8 +1,9 @@
 /**
- * GET /api/v1/ai/tools/shipping/quote?state=<state>&subtotalKobo=<n>
+ * GET /api/v1/ai/tools/shipping/quote?state=<state>&lga=<area>&subtotal=<naira>
  *
- * Shipping rate + ETA for a Nigerian state. Optional subtotalKobo lets the
- * AI check whether the customer qualifies for free shipping. Falls back to
+ * Shipping rate + ETA for a Nigerian state. Optional `subtotal` (Naira; the
+ * older `subtotalKobo` still works) lets the AI check whether the customer
+ * qualifies for free shipping. Falls back to
  * the flat rate when no zone covers the state.
  *
  * `state` is matched leniently (casing, a trailing "State", punctuation, and
@@ -18,6 +19,7 @@ import { db, hasDatabase } from "@/lib/db";
 import { findZoneForState, findZoneForArea, canonicalStateName } from "@/lib/shipping-zone";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { formatMoney } from "@/lib/money";
+import { nairaParamToKobo } from "@/lib/ai/naira-input";
 import { AppError, ValidationError } from "@/lib/errors";
 
 export const runtime = "nodejs";
@@ -36,7 +38,8 @@ export async function GET(req: NextRequest) {
     }
     const subtotalParam = Number(req.nextUrl.searchParams.get("subtotalKobo"));
     const subtotalKobo =
-      Number.isFinite(subtotalParam) && subtotalParam >= 0 ? subtotalParam : 0;
+      nairaParamToKobo(req.nextUrl.searchParams.get("subtotal")) ??
+      (Number.isFinite(subtotalParam) && subtotalParam >= 0 ? subtotalParam : 0);
     // Optional LGA/area — when given, an area-specific price beats the state one.
     const requestedLga = req.nextUrl.searchParams.get("lga")?.trim();
 

@@ -157,6 +157,13 @@ Say you're connecting them to the team, and stop forcing tool calls.
 
 ## 4. Tool definitions (OpenAI / DeepSeek function-calling format)
 
+> **Dailzero agents: don't copy these by hand any more.** The live tool list is
+> code, in `src/lib/ai/dailzero-tools.ts`, and `pnpm ai:sync-tools` pushes it to
+> every agent (dry run by default, `--apply` to push). It is the source of truth
+> where it differs from below; notably money INPUTS are now Naira (`offer`,
+> `amount`, `subtotal`), with the `*Kobo` fields kept only for older callers.
+> The array below stays as a reference for other orchestrators.
+
 Drop this array into your agent's `tools`. Your backend maps each `name` to the HTTP
 call in the **mapping table** below and adds the `Authorization` header.
 
