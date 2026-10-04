@@ -84,7 +84,7 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       description: [
         "Search the live Avmall catalogue. Matches product name, brand, category, description and common synonyms (e.g. 'power bank' finds 'portable charger'), and tolerates brand typos ('orimo' → Oraimo). In-stock items rank first.",
         "ALWAYS call this before saying whether we sell something — never answer from memory.",
-        "Returns found, count, inStockCount and products[] (name, brand, categoryName, description, price, salePrice, status, inStock, stock, productUrl, slug). If found is false, we do NOT stock it: say so. If a message field is present, follow it.",
+        "Returns found, count, inStockCount and products[] (name, brand, categoryName, description, price, salePrice, status, inStock, stock, productUrl, slug). If found is false, we do NOT stock it: say so. When the customer names a brand, the response lists requestedBrands and marks each product isRequestedBrand: only those are that brand — never describe another brand's product as the one they asked for. If a message field is present, follow it.",
         STOCK_NOTE,
         MONEY_NOTE,
         LINK_NOTE,

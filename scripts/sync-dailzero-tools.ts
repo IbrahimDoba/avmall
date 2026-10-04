@@ -22,8 +22,9 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildAvmallTools, DAILZERO_MAX_TOOLS, type DailzeroTool } from "@/lib/ai/dailzero-tools";
-import { createDailzeroClient, type DailzeroStoredTool } from "@/lib/dailzero";
+import { buildAvmallTools, DAILZERO_MAX_TOOLS } from "@/lib/ai/dailzero-tools";
+import { createDailzeroClient } from "@/lib/dailzero";
+import { currentToolToken, planAgentSync, pushAndVerify } from "@/lib/ai/sync-tools";
 import { SITE } from "@/lib/site";
 
 const args = process.argv.slice(2);
@@ -36,17 +37,6 @@ const baseUrl = (baseArg ?? SITE.url).replace(/\/+$/, "");
 function fail(msg: string): never {
   console.error(`\n✖ ${msg}\n`);
   process.exit(1);
-}
-
-/** The Bearer token an agent's tools currently send, if they all agree. */
-function currentToken(tools: DailzeroStoredTool[]): string | null {
-  const tokens = new Set(
-    tools
-      .map((t) => t.headers?.Authorization ?? t.headers?.authorization ?? "")
-      .filter((h) => h.toLowerCase().startsWith("bearer "))
-      .map((h) => h.slice(7).trim()),
-  );
-  return tokens.size === 1 ? [...tokens][0]! : null;
 }
 
 /** Prod must accept the token: 404 on a made-up reference = authorised. */
@@ -77,33 +67,6 @@ async function siteHasNairaInputs(): Promise<boolean> {
   return res.status === 404;
 }
 
-/** Field-level differences between what's stored and what we'd push. */
-function diffTool(cur: DailzeroStoredTool, next: DailzeroTool): string[] {
-  const out: string[] = [];
-  for (const k of ["url", "method", "displayName", "description"] as const) {
-    if ((cur[k] ?? "") !== next[k]) out.push(k);
-  }
-  const params = (ps: DailzeroTool["parameters"] = []) =>
-    JSON.stringify(
-      [...ps]
-        .map((p) => ({ ...p, required: !!p.required }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    );
-  if (params(cur.parameters) !== params(next.parameters)) {
-    const curNames = new Set((cur.parameters ?? []).map((p) => p.name));
-    const nextNames = new Set(next.parameters.map((p) => p.name));
-    const added = [...nextNames].filter((n) => !curNames.has(n));
-    const removed = [...curNames].filter((n) => !nextNames.has(n));
-    out.push(
-      "parameters" +
-        (added.length ? ` +${added.join(",+")}` : "") +
-        (removed.length ? ` -${removed.join(",-")}` : ""),
-    );
-  }
-  if (JSON.stringify(cur.headers ?? {}) !== JSON.stringify(next.headers ?? {})) out.push("headers");
-  return out;
-}
-
 async function main() {
   const apiKey = process.env.DAILZERO_API_KEY?.trim();
   if (!apiKey) fail("DAILZERO_API_KEY is not set (.env.local).");
@@ -117,7 +80,6 @@ async function main() {
 
   console.log(`Site: ${baseUrl}`);
   console.log(`Mode: ${apply ? "APPLY" : "dry run (add --apply to push)"}`);
-
   if (!(await siteHasNairaInputs())) {
     const msg = `${baseUrl} is still running the older tool endpoints (they want kobo, these tools send Naira). Deploy this change first, then sync.`;
     if (apply) fail(msg);
@@ -138,7 +100,7 @@ async function main() {
     writeFileSync(backup, JSON.stringify({ tools: current }, null, 2));
     console.log(`   backup: ${backup}`);
 
-    const token = process.env.DAILZERO_TOOL_TOKEN?.trim() || currentToken(current);
+    const token = process.env.DAILZERO_TOOL_TOKEN?.trim() || currentToolToken(current);
     if (!token) {
       fail(
         `${agent.businessName}: can't tell which token its tools use (none, or several). Set DAILZERO_TOOL_TOKEN to the AI_AGENT_TOKEN value from Vercel.`,
@@ -153,57 +115,32 @@ async function main() {
     const desired = buildAvmallTools(baseUrl, token);
     if (desired.length > DAILZERO_MAX_TOOLS) fail(`${desired.length} tools; Dailzero allows ${DAILZERO_MAX_TOOLS}.`);
 
-    const byName = new Map(current.map((t) => [t.name, t]));
-    const desiredNames = new Set(desired.map((t) => t.name));
-    const removed = current.filter((t) => !desiredNames.has(t.name));
-
-    let changes = 0;
-    for (const t of desired) {
-      const cur = byName.get(t.name);
-      if (!cur) {
-        console.log(`   + ${t.name}  (new)`);
-        changes++;
-        continue;
-      }
-      const d = diffTool(cur, t);
-      if (d.length) {
-        console.log(`   ~ ${t.name}: ${d.join("; ")}`);
-        changes++;
-      }
+    const plan = planAgentSync(agent, current, desired);
+    for (const c of plan.changes) {
+      if (c.kind === "added") console.log(`   + ${c.name}  (new)`);
+      else if (c.kind === "changed") console.log(`   ~ ${c.name}: ${c.fields.join("; ")}`);
+      else
+        console.log(
+          `   - ${c.name}  (not in our list — ${allowRemove ? "will be removed" : "blocks --apply unless --allow-remove"})`,
+        );
     }
-    for (const t of removed) {
-      console.log(`   - ${t.name}  (not in our list — ${allowRemove ? "will be removed" : "blocks --apply unless --allow-remove"})`);
-      changes++;
-    }
-    if (!changes) {
+    if (!plan.changes.length) {
       console.log("   ✓ already up to date\n");
       continue;
     }
-
     if (!apply) {
       console.log("");
       continue;
     }
-    if (removed.length && !allowRemove) {
+    if (plan.removed.length && !allowRemove) {
       console.log(
-        `   ✖ skipped: would remove ${removed.map((t) => t.name).join(", ")}. Add it to dailzero-tools.ts, or re-run with --allow-remove.\n`,
+        `   ✖ skipped: would remove ${plan.removed.join(", ")}. Add it to dailzero-tools.ts, or re-run with --allow-remove.\n`,
       );
       blocked = true;
       continue;
     }
 
-    await dz.putTools(agent.id, desired);
-
-    // Read back and confirm Dailzero kept what we sent.
-    const after = await dz.getTools(agent.id);
-    const afterByName = new Map(after.map((t) => [t.name, t]));
-    const drift = desired.flatMap((t) => {
-      const got = afterByName.get(t.name);
-      if (!got) return [`${t.name} missing`];
-      const d = diffTool(got, t);
-      return d.length ? [`${t.name}: ${d.join("; ")}`] : [];
-    });
-    if (after.length !== desired.length) drift.push(`stored ${after.length} tools, sent ${desired.length}`);
+    const drift = await pushAndVerify(dz, agent.id, desired);
     if (drift.length) {
       console.log(`   ⚠ pushed, but read-back differs:\n     ${drift.join("\n     ")}\n`);
       blocked = true;

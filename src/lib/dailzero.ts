@@ -10,6 +10,7 @@
  */
 
 import type { DailzeroTool } from "@/lib/ai/dailzero-tools";
+import { AppError } from "@/lib/errors";
 
 export const DAILZERO_API_BASE = "https://www.dailzero.com/api/v1";
 
@@ -22,13 +23,17 @@ export interface DailzeroAgent {
 /** A tool as Dailzero stores it — ours plus the id it assigns. */
 export type DailzeroStoredTool = DailzeroTool & { id?: string };
 
-export class DailzeroError extends Error {
+/** An upstream Dailzero failure. Surfaces from our API as 502 with the
+ *  upstream code (e.g. DAILZERO_INSUFFICIENT_CREDITS) instead of a bare 500. */
+export class DailzeroError extends AppError {
   constructor(
+    /** Dailzero's HTTP status. */
     public readonly status: number,
-    public readonly code: string,
+    /** Dailzero's error code, e.g. RATE_LIMITED, INSUFFICIENT_CREDITS. */
+    public readonly upstreamCode: string,
     message: string,
   ) {
-    super(message);
+    super(`DAILZERO_${upstreamCode}`, `Dailzero: ${message}`, 502);
     this.name = "DailzeroError";
   }
 }
@@ -73,6 +78,32 @@ export function createDailzeroClient(apiKey: string) {
       call<{ tools: DailzeroStoredTool[] }>(apiKey, `/agents/${agentId}/tools`).then(
         (r) => r.tools,
       ),
+
+    /**
+     * One agent turn (runs its webhook tools). `messages` is the conversation
+     * so far, oldest first, ending with the user's message — Dailzero caps it
+     * at 50 messages / 32k chars. Billed per call; `idempotencyKey` makes a
+     * retry replay the first answer instead of running (and charging) again.
+     */
+    chat: (input: {
+      agentId: string;
+      messages: { role: "user" | "assistant"; content: string }[];
+      conversationId?: string;
+      idempotencyKey?: string;
+    }) =>
+      call<{
+        message: { role: "assistant"; content: string };
+        usage?: { input_tokens: number; output_tokens: number; credits?: number };
+        remaining_credits?: number;
+      }>(apiKey, "/chat/completions", {
+        method: "POST",
+        headers: input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : {},
+        body: JSON.stringify({
+          agentId: input.agentId,
+          messages: input.messages,
+          ...(input.conversationId && { metadata: { conversation_id: input.conversationId } }),
+        }),
+      }),
 
     /** Replaces the agent's ENTIRE tool list. The response shape isn't
      *  documented, so callers should read the list back with getTools. */

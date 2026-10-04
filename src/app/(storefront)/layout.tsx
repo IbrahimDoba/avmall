@@ -6,6 +6,8 @@ import { SITE } from "@/lib/site";
 import { listActiveStores, getStorefrontStore } from "@/lib/store";
 import { listStoreCategories } from "@/lib/data/products";
 import { getStoreContact, storeWaLink } from "@/lib/data/settings";
+import { AiChatWidget } from "@/components/storefront/ai-chat-widget";
+import { env } from "@/lib/env";
 
 // The layout reads the active store (cookie/header) to render per-store nav +
 // footer categories, so it must render dynamically — never statically cached,
@@ -56,6 +58,7 @@ export default async function StorefrontLayout({ children }: { children: React.R
   // Support/WhatsApp number is admin-editable at /admin/settings.
   const contact = await getStoreContact();
   const whatsappHref = storeWaLink(contact.whatsapp);
+  const chatEnabled = !!env.DAILZERO_API_KEY && !!env.DAILZERO_WIDGET_AGENT_ID;
 
   return (
     <div className="min-h-screen flex flex-col bg-bg">
@@ -80,15 +83,23 @@ export default async function StorefrontLayout({ children }: { children: React.R
         whatsappHref={whatsappHref}
       />
       <Toaster />
-      {/* D-Zero AI chat widget. The init queue lets calls fire before the embed
-          script finishes loading. Allowed origins live in the D-Zero dashboard. */}
-      <script
-        dangerouslySetInnerHTML={{
-          __html:
-            "window.dz=window.dz||function(...a){(window.dz.q=window.dz.q||[]).push(a)};dz('init',{publicKey:'pk_live_f292c150e39cbce2ea8200a9'})",
-        }}
-      />
-      <script async src="https://www.dailzero.com/embed/v1.js" />
+      {/* Our own chat widget, backed by /api/v1/chat (the Dailzero widget
+          agent, server-side). Until DAILZERO_API_KEY and
+          DAILZERO_WIDGET_AGENT_ID are set, fall back to Dailzero's hosted
+          embed so the site is never without a chat. */}
+      {chatEnabled ? (
+        <AiChatWidget />
+      ) : (
+        <>
+          <script
+            dangerouslySetInnerHTML={{
+              __html:
+                "window.dz=window.dz||function(...a){(window.dz.q=window.dz.q||[]).push(a)};dz('init',{publicKey:'pk_live_f292c150e39cbce2ea8200a9'})",
+            }}
+          />
+          <script async src="https://www.dailzero.com/embed/v1.js" />
+        </>
+      )}
     </div>
   );
 }

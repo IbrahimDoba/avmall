@@ -522,8 +522,8 @@ function diceSim(a: string, b: string): number {
   return (2 * inter) / (A.size + B.size);
 }
 
-// Distinct brand list, cached briefly in-memory (brands change rarely). Only the
-// fuzzy typo fallback reads it, so the common search path never fetches it.
+// Distinct brand list, cached briefly in-memory (brands change rarely). Search
+// matches the query against it on every call, so the cache is what keeps that cheap.
 let brandCache: { at: number; brands: string[] } | null = null;
 async function knownBrands(): Promise<string[]> {
   const now = Date.now();
@@ -544,31 +544,50 @@ export async function searchProducts(
   limit = 8,
   storeId?: string,
 ): Promise<ProductSearchHit[]> {
+  return (await searchProductsDetailed(query, limit, storeId)).hits;
+}
+
+/**
+ * {@link searchProducts} plus the brands the query named. A brand in the query
+ * is the strongest intent signal there is: "oraimo power bank" must rank the
+ * Oraimo power bank — even out of stock — above another brand's that's in
+ * stock, and the AI needs to know which hits are that brand and which are
+ * only alternatives, or it labels a Telexon "an Oraimo".
+ */
+export async function searchProductsDetailed(
+  query: string,
+  limit = 8,
+  storeId?: string,
+): Promise<{ hits: ProductSearchHit[]; requestedBrands: string[] }> {
   const { tokens, terms, norm } = expandSearchTerms(query);
-  if (terms.length === 0 || !hasDatabase) return [];
+  if (terms.length === 0 || !hasDatabase) return { hits: [], requestedBrands: [] };
 
-  let hits = await queryProductHits(terms, tokens, norm, limit, storeId);
-
-  // Typo tolerance: a thin result is usually a misspelled brand ("orimo" →
-  // "Oraimo") that substring search can't catch. Fuzzy-match the query tokens
-  // against the real brand list and retry with any close brand added as a term.
-  if (hits.length < 3) {
-    const corrections = new Set<string>();
-    for (const b of await knownBrands()) {
-      const bn = normalizeText(b);
-      if (!bn) continue;
-      for (const t of tokens) {
-        if (t.length >= 4 && bn !== t && diceSim(t, bn) >= 0.6) corrections.add(bn);
-      }
-    }
-    if (corrections.size > 0) {
-      const mergedTerms = [...new Set([...terms, ...corrections])].slice(0, 24);
-      const mergedTokens = [...new Set([...tokens, ...corrections])];
-      hits = await queryProductHits(mergedTerms, mergedTokens, norm, limit, storeId);
-    }
+  // Brands named in the query — exactly, as a phrase ("new age"), or misspelled
+  // ("orimo" → Oraimo, Dice ≥ 0.6 on 4+ letter words). One word containing the
+  // other is NOT a typo — "phone" vs a brand "iPhone" scores 0.89 but means any
+  // phone — and substring search already finds those, so it's excluded.
+  const isTypoOf = (t: string, bn: string) =>
+    t.length >= 4 && !bn.includes(t) && !t.includes(bn) && diceSim(t, bn) >= 0.6;
+  const requested = new Map<string, string>(); // normalised → as stored
+  for (const b of await knownBrands()) {
+    const bn = normalizeText(b);
+    if (bn.length < 3) continue;
+    const named =
+      tokens.includes(bn) ||
+      (bn.includes(" ") && norm.includes(bn)) ||
+      tokens.some((t) => isTypoOf(t, bn));
+    if (named && !requested.has(bn)) requested.set(bn, b);
   }
+  const brandNorms = new Set(requested.keys());
 
-  return hits;
+  // Misspelled brands also become search terms, or the candidate query (a
+  // substring match) would never find them at all.
+  const corrections = [...brandNorms].filter((bn) => !tokens.includes(bn) && !norm.includes(bn));
+  const mergedTerms = [...new Set([...terms, ...corrections])].slice(0, 24);
+  const mergedTokens = [...new Set([...tokens, ...corrections])];
+
+  const hits = await queryProductHits(mergedTerms, mergedTokens, norm, limit, storeId, brandNorms);
+  return { hits, requestedBrands: [...requested.values()] };
 }
 
 /** Lightweight product shape for the admin category picker. A subset of
@@ -639,6 +658,8 @@ async function queryProductHits(
   norm: string,
   limit: number,
   storeId?: string,
+  /** Normalised brands the shopper named — their products rank first. */
+  requestedBrands: ReadonlySet<string> = new Set(),
 ): Promise<ProductSearchHit[]> {
   // Broad candidate net: any expanded term in ANY searchable field — name,
   // brand, slug, both descriptions, the category, or an exact tag. This is what
@@ -713,6 +734,10 @@ async function queryProductHits(
       else if (short.includes(term)) s += 3;
       else if (long.includes(term)) s += 1;
     }
+    // The brand they asked for outweighs everything below, stock included: an
+    // out-of-stock Oraimo is the honest answer to "oraimo power bank", and the
+    // in-stock boost would otherwise hand that slot to another brand.
+    if (requestedBrands.has(normalizeText(p.brand))) s += 30;
     // Lead with what's actually in stock — a moderate boost, so a strong exact
     // match that happens to be out of stock still shows, just lower.
     const stk = p.variants.reduce((a, v) => a + v.storeStock.reduce((b, ss) => b + ss.onHand, 0), 0);
