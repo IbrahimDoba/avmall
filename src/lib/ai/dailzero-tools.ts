@@ -42,6 +42,12 @@ export interface DailzeroTool {
   headers?: Record<string, string>;
 }
 
+/** Which channel an agent serves, from its Dailzero name ("Avmall Ltd Widget"
+ *  is the website chat; anything else is WhatsApp). */
+export function channelForAgent(businessName: string): DailzeroChannel {
+  return /widget|web/i.test(businessName) ? "web" : "whatsapp";
+}
+
 /** Hard limit on Dailzero's side. */
 export const DAILZERO_MAX_TOOLS = 50;
 
@@ -49,6 +55,14 @@ export const DAILZERO_MAX_TOOLS = 50;
 
 const MONEY_NOTE =
   "All prices come back as Naira strings (e.g. \"₦4,500\") — quote them exactly as given, never multiply or convert. `price` is ALWAYS what the customer pays today; `regularPrice` appears only when on sale and is the old, higher price (write it as \"₦8,400, was ₦12,500\").";
+
+/** Where the agent talks to customers. The website chat has no live staff
+ *  hand-over; WhatsApp does (Dailzero's own), and the customer is already there. */
+export type DailzeroChannel = "web" | "whatsapp";
+
+/** Website-only: there is no one to hand over to, so send them to WhatsApp. */
+const WEB_HELP_NOTE =
+  "If no order is found, or they say they paid and nothing came, don't promise that someone will help or ask them to wait: give them the support.whatsappLink from the response (or from get_store_info) exactly as given, so staff can check. Never build a wa.me link yourself, and never from the customer's own number.";
 
 const FACTS_NOTE =
   "Only state facts the tool returned. Never invent colours, sizes, specs, battery life, warranty, or whether something is 'original' — if the data doesn't say, say you don't have that detail and offer the product link.";
@@ -69,8 +83,13 @@ const ITEMS_SHAPE =
  *
  * @param baseUrl Public site origin, e.g. https://www.avmall.com.ng (no trailing slash).
  * @param token   AI_AGENT_TOKEN, sent as a Bearer header on every call.
+ * @param channel Where this agent chats — a few rules differ (see DailzeroChannel).
  */
-export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[] {
+export function buildAvmallTools(
+  baseUrl: string,
+  token: string,
+  channel: DailzeroChannel = "whatsapp",
+): DailzeroTool[] {
   const api = `${baseUrl.replace(/\/+$/, "")}/api/v1/ai/tools`;
   const headers = { Authorization: `Bearer ${token}` };
 
@@ -165,7 +184,12 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       url: `${api}/store`,
       description: [
         "Avmall's shop address, phone, WhatsApp (with a tap-to-chat whatsappLink) and email, live from the store's settings.",
-        "Call it when the customer asks where the shop is, how to call or reach someone, or wants a human / staff / manager: give them the whatsappLink, never pretend to transfer them.",
+        "Call it when the customer asks where the shop is, how to call or reach someone, or wants a human / staff / manager: give them the whatsappLink.",
+        ...(channel === "web"
+          ? [
+              "In the website chat nobody can join the conversation: NEVER say 'one moment', 'let me sort this out', 'a member of our team will be with you shortly', or that you are transferring them — give the whatsappLink instead.",
+            ]
+          : []),
         "It doesn't list opening hours or pickup: never guess those, point them to WhatsApp.",
       ].join(" "),
       parameters: [],
@@ -342,6 +366,7 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       url: `${api}/orders/{number}`,
       description: [
         "Status of one order by its number: order status, payment status, items, totals, delivery address and shipped/delivered dates.",
+        ...(channel === "web" ? [WEB_HELP_NOTE] : []),
         MONEY_NOTE,
       ].join(" "),
       parameters: [
@@ -360,6 +385,7 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       url: `${api}/orders/by-phone`,
       description: [
         "The customer's most recent orders, when they ask about an order but don't have the number. On WhatsApp use their WhatsApp number; on the website, ask for the phone number they ordered with.",
+        ...(channel === "web" ? [WEB_HELP_NOTE] : []),
         MONEY_NOTE,
       ].join(" "),
       parameters: [
