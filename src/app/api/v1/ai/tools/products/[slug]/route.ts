@@ -15,6 +15,7 @@ import { getProductBySlug } from "@/lib/data/products";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { NotFoundError } from "@/lib/errors";
 import { formatMoney } from "@/lib/money";
+import { priceFields } from "@/lib/ai/price-fields";
 import { env } from "@/lib/env";
 import { SITE } from "@/lib/site";
 
@@ -44,11 +45,8 @@ export async function GET(
         // Human-readable Naira ONLY — never expose raw kobo to the LLM, or it
         // states kobo as Naira (₦12,500 → "₦1,250,000"). Currency is NGN.
         currency: "NGN",
-        price: formatMoney(p.price),
-        ...(p.saleActive && p.sale != null && {
-          salePrice: formatMoney(p.sale),
-          discount: formatMoney(p.price - p.sale),
-        }),
+        // `price` is what they pay today; regularPrice only while on sale.
+        ...priceFields(p.price, p.sale, p.saleActive),
         inStock: p.stock > 0,
         stock: p.stock,
         // Variant matrix (size × colour). Hidden when there's only a default

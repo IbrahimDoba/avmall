@@ -10,7 +10,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchProductsDetailed, listProducts } from "@/lib/data/products";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
-import { formatMoney } from "@/lib/money";
+import { priceFields } from "@/lib/ai/price-fields";
 import { env } from "@/lib/env";
 import { SITE } from "@/lib/site";
 
@@ -33,9 +33,11 @@ export async function GET(req: NextRequest) {
     // has something to suggest. When `q` is set, run the substring search.
     let products;
     let requestedBrands: string[] = [];
+    let partial = false;
     if (q.length >= 2) {
       const found = await searchProductsDetailed(q, limit);
       requestedBrands = found.requestedBrands;
+      partial = found.partial;
       const wanted = new Set(requestedBrands.map((b) => b.toLowerCase()));
       products = found.hits.map((p) => ({
         id: p.id,
@@ -50,10 +52,7 @@ export async function GET(req: NextRequest) {
         status: p.stock > 0 ? "In stock" : "Out of stock",
         // Human-readable Naira — the LLM must never see raw kobo (it reports
         // it as Naira → 100× inflated "millions"). Currency is always NGN.
-        price: formatMoney(Number(p.priceKobo)),
-        ...(p.saleActive && p.saleKobo != null && {
-          salePrice: formatMoney(Number(p.saleKobo)),
-        }),
+        ...priceFields(Number(p.priceKobo), p.saleKobo, p.saleActive),
         inStock: p.stock > 0,
         stock: p.stock,
         imageUrl: p.imageUrl,
@@ -74,10 +73,7 @@ export async function GET(req: NextRequest) {
         categoryName: p.category,
         description: p.short,
         status: p.stock > 0 ? "In stock" : "Out of stock",
-        price: formatMoney(p.price),
-        ...(p.saleActive && p.sale != null && {
-          salePrice: formatMoney(p.sale),
-        }),
+        ...priceFields(p.price, p.sale, p.saleActive),
         inStock: p.stock > 0,
         stock: p.stock,
         imageUrl: p.imageUrl,
@@ -100,6 +96,8 @@ export async function GET(req: NextRequest) {
     const message =
       products.length === 0
         ? `No products matched "${q}". We do not have this in our catalogue. Tell the customer plainly, suggest another word or brand, or call list_categories. Do NOT say it is available.`
+        : partial
+          ? `Nothing matches all of "${q}". These only match PART of it, so they are not what the customer asked for. Say plainly that we don't have exactly that; only mention one of these if it is genuinely close, and say how it differs.`
         : inStockCount === 0
           ? "Every product that matched is OUT OF STOCK. Do not offer them as available. Say so, and offer close alternatives (recommend_products) or to notify them when it is back."
           : brandMessage;
@@ -109,6 +107,7 @@ export async function GET(req: NextRequest) {
         query: q,
         ...(category && { category }),
         found: products.length > 0,
+        ...(partial && { exactMatch: false }),
         count: products.length,
         inStockCount,
         ...(requestedBrands.length > 0 && { requestedBrands }),

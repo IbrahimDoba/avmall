@@ -48,7 +48,10 @@ export const DAILZERO_MAX_TOOLS = 50;
 // ── Shared description fragments ─────────────────────────────────────────────
 
 const MONEY_NOTE =
-  "All prices come back as Naira strings (e.g. \"₦4,500\") — quote them exactly as given, never multiply or convert.";
+  "All prices come back as Naira strings (e.g. \"₦4,500\") — quote them exactly as given, never multiply or convert. `price` is ALWAYS what the customer pays today; `regularPrice` appears only when on sale and is the old, higher price (write it as \"₦8,400, was ₦12,500\").";
+
+const FACTS_NOTE =
+  "Only state facts the tool returned. Never invent colours, sizes, specs, battery life, warranty, or whether something is 'original' — if the data doesn't say, say you don't have that detail and offer the product link.";
 
 const LINK_NOTE =
   "Each product has a productUrl: share that link so the customer can view it. Never paste imageUrl and never try to send images.";
@@ -81,9 +84,10 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       description: [
         "Search the live Avmall catalogue. Matches product name, brand, category, description and common synonyms (e.g. 'power bank' finds 'portable charger'), and tolerates brand typos ('orimo' → Oraimo). In-stock items rank first.",
         "ALWAYS call this before saying whether we sell something — never answer from memory.",
-        "Returns found, count, inStockCount and products[] (name, brand, categoryName, description, price, salePrice, status, inStock, stock, productUrl, slug). If found is false, we do NOT stock it: say so. When the customer names a brand, the response lists requestedBrands and marks each product isRequestedBrand: only those are that brand — never describe another brand's product as the one they asked for. If a message field is present, follow it.",
+        "Returns found, count, inStockCount and products[] (name, brand, categoryName, description, price, regularPrice, status, inStock, stock, productUrl, slug). If found is false, we do NOT stock it: say so. If exactMatch is false, nothing matched everything they asked for: say we don't have exactly that. When the customer names a brand, the response lists requestedBrands and marks each product isRequestedBrand: only those are that brand — never describe another brand's product as the one they asked for. If a message field is present, follow it.",
         STOCK_NOTE,
         MONEY_NOTE,
+        FACTS_NOTE,
         LINK_NOTE,
       ].join(" "),
       parameters: [
@@ -109,10 +113,11 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       method: "GET",
       url: `${api}/products/{slug}`,
       description: [
-        "Full live detail for ONE product: price, salePrice, inStock and stock, variants (each with id, label, stock and its own price if different), bulkTiers (quantity discounts), negotiable, preorder, moq and eta.",
+        "Full live detail for ONE product: price, regularPrice, inStock and stock, variants (each with id, label, stock and its own price if different), bulkTiers (quantity discounts), negotiable, preorder, moq and eta.",
         "Call it before quoting a specific product's price, stock or options, and to get variant ids for cart and order tools. A 404 means the product does not exist or is no longer sold.",
         STOCK_NOTE,
         MONEY_NOTE,
+        FACTS_NOTE,
         LINK_NOTE,
       ].join(" "),
       parameters: [
@@ -134,6 +139,7 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
         "Returns found, count and products[]. If found is false, do not invent suggestions.",
         STOCK_NOTE,
         MONEY_NOTE,
+        FACTS_NOTE,
         LINK_NOTE,
       ].join(" "),
       parameters: [
@@ -152,6 +158,19 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       parameters: [],
     },
 
+    {
+      name: "get_store_info",
+      displayName: "Shop details",
+      method: "GET",
+      url: `${api}/store`,
+      description: [
+        "Avmall's shop address, phone, WhatsApp (with a tap-to-chat whatsappLink) and email, live from the store's settings.",
+        "Call it when the customer asks where the shop is, how to call or reach someone, or wants a human / staff / manager: give them the whatsappLink, never pretend to transfer them.",
+        "It doesn't list opening hours or pickup: never guess those, point them to WhatsApp.",
+      ].join(" "),
+      parameters: [],
+    },
+
     // ── Delivery ──
     {
       name: "quote_shipping",
@@ -161,7 +180,7 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       description: [
         "Delivery fee and delivery time to one Nigerian state, optionally a specific LGA/area within it (some areas, e.g. parts of Kaduna, are priced differently from the rest of the state — pass lga whenever the customer names one).",
         "Accepts messy state names ('abuja', 'lagos state', 'Akwa-Ibom') and returns matchedState: reuse that EXACT value as state in quote_cart and create_order so the totals agree.",
-        "May return unavailable: true when we do not deliver there — then say so and offer the WhatsApp contact; never make up a fee.",
+        "May return unavailable: true when we do not deliver there — then say so and offer the WhatsApp contact; never make up a fee. If areaMatched is false, the fee is the state's general rate, not a price for that area: follow areaMessage.",
         MONEY_NOTE,
       ].join(" "),
       parameters: [

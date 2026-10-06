@@ -18,11 +18,14 @@ const SEARCH_SYNONYMS: readonly (readonly string[])[] = [
   ["power bank", "powerbank", "portable charger", "battery pack", "backup battery", "power"],
   ["charger", "adapter", "adaptor", "charging", "fast charger", "wall charger"],
   ["cable", "cord", "usb cable", "charging cable", "type c", "lightning cable"],
-  ["earphone", "earbud", "earbuds", "headphone", "headphones", "headset", "airpod", "airpods", "handsfree", "audio"],
+  ["earphone", "earbud", "earbuds", "earpiece", "headphone", "headphones", "headset", "airpod", "airpods", "handsfree", "audio"],
   ["speaker", "bluetooth speaker", "sound", "soundbar", "boombox"],
   ["fan", "rechargeable fan", "standing fan", "table fan", "cooling fan", "cooler"],
   ["phone", "smartphone", "android", "mobile", "handset"],
   ["tablet", "tab", "ipad"],
+  ["gamepad", "game pad", "pad", "controller", "joystick"],
+  ["mifi", "router", "modem", "hotspot", "wifi", "internet"],
+  ["cream", "lotion", "moisturizer", "moisturiser"],
   ["smartwatch", "smart watch", "watch", "fitness band"],
   ["television", "tv", "smart tv"],
   ["blender", "mixer", "grinder", "smoothie maker"],
@@ -47,6 +50,8 @@ const SEARCH_STOPWORDS = new Set([
   "some", "any", "good", "best", "new", "cheap", "affordable", "quality", "original", "genuine", "please", "pls",
   "abeg", "this", "that", "your", "their", "there", "it", "can", "could", "would", "like", "one", "ones", "us", "we",
   "product", "products", "item", "items", "available", "stock",
+  // Chat phrasing ("how much be that…", "u get am?") that names no product.
+  "how", "much", "price", "cost", "u", "ur", "una", "dey", "wey", "hi", "hello", "kindly", "plz", "sir", "ma",
 ]);
 
 export function normalizeText(s: string): string {
@@ -63,11 +68,22 @@ export function singular(w: string): string {
   return w.length > 3 && w.endsWith("s") ? w.slice(0, -1) : w;
 }
 
-export function expandSearchTerms(query: string): { tokens: string[]; terms: string[]; norm: string } {
+export function expandSearchTerms(query: string): {
+  tokens: string[];
+  terms: string[];
+  norm: string;
+  /** Per token: the words that count as matching it — itself, its singular,
+   *  and the synonym group(s) it triggered. Drives "did the product match
+   *  everything they asked for" (see wordCoverage). */
+  tokenTerms: string[][];
+} {
   const norm = normalizeText(query);
   const tokens = norm.split(" ").filter((t) => t.length >= 2 && !SEARCH_STOPWORDS.has(t));
   const terms = new Set<string>();
   if (norm) terms.add(norm);
+  const tokenTerms = tokens.map((t) => [...new Set([t, singular(t)])]);
+  // "power banks" must trigger the "power bank" group like "power bank" does.
+  const singularPhrase = (x: string) => x.split(" ").map(singular).join(" ");
   for (const t of tokens) {
     terms.add(t);
     const sg = singular(t);
@@ -77,18 +93,91 @@ export function expandSearchTerms(query: string): { tokens: string[]; terms: str
   // the query, or a token equal to a group term (singular-insensitive). Looser
   // substring matching wrongly pulled "earphones" into the phone group, etc.
   for (const group of SEARCH_SYNONYMS) {
-    const triggered = group.some(
-      (g) =>
-        // Multi-word group terms ("power bank") match as a phrase; single words
-        // must equal a whole token, so "earphones" can't trigger via "phone".
-        (g.includes(" ") && norm.length >= 3 && norm.includes(g)) ||
-        tokens.some((t) => g === t || singular(g) === singular(t)),
+    let triggered = group.some(
+      (g) => g.includes(" ") && norm.length >= 3 && singularPhrase(norm).includes(singularPhrase(g)),
     );
+    tokens.forEach((t, i) => {
+      // Multi-word group terms ("power bank") match as a phrase and credit each
+      // of their words; single words must equal a whole token, so "earphones"
+      // can't trigger via "phone".
+      const byWord = group.some((g) => g === t || singular(g) === singular(t));
+      const byPhrase = group.some(
+        (g) =>
+          g.includes(" ") &&
+          norm.length >= 3 &&
+          singularPhrase(norm).includes(singularPhrase(g)) &&
+          g.split(" ").some((w) => singular(w) === singular(t)),
+      );
+      if (byWord || byPhrase) {
+        triggered = true;
+        tokenTerms[i]!.push(...group);
+      }
+    });
     if (triggered) for (const g of group) terms.add(g);
   }
   const effectiveTokens = tokens.length ? tokens : norm ? [norm] : [];
   // Cap the term set so the OR query stays bounded.
-  return { tokens: effectiveTokens, terms: [...terms].slice(0, 20), norm };
+  return {
+    tokens: effectiveTokens,
+    terms: [...terms].slice(0, 20),
+    norm,
+    // Index-aligned with `tokens` (callers filter both together).
+    tokenTerms: tokens.length ? tokenTerms : norm ? [[norm]] : [],
+  };
+}
+
+/**
+ * Does `text` contain `term` as a word (or the start of one)? "power" matches
+ * "powerbank" and "power bank", but "face" doesn't match "surface" — plain
+ * substring matching put a marble table in the results for "face cream".
+ * `text` should already be normalised (lowercase, spaces for punctuation).
+ */
+export function hasWord(text: string, term: string): boolean {
+  if (!term) return false;
+  let at = text.indexOf(term);
+  while (at !== -1) {
+    if (at === 0 || text[at - 1] === " ") return true;
+    at = text.indexOf(term, at + 1);
+  }
+  return false;
+}
+
+/** A word in `text` that's a near-spelling of `term` ("chager" ~ "charger").
+ *  Only for 5+ letter terms, same first letter — short words are too easy to
+ *  confuse. */
+function hasNearWord(text: string, term: string): boolean {
+  if (term.length < 5 || term.includes(" ")) return false;
+  return text
+    .split(" ")
+    .some((w) => w.length >= 4 && w[0] === term[0] && Math.abs(w.length - term.length) <= 2 && diceSim(w, term) >= 0.7);
+}
+
+/**
+ * How many of the shopper's words (`tokenTerms`, from expandSearchTerms) a
+ * product's text covers — each by the word itself, a synonym, or a near
+ * spelling. Search keeps only the products that cover the most, so "face
+ * cream" never answers with something that's only a "face" anything.
+ */
+/** Words a product must match to count as "what they asked for". Bare numbers
+ *  ("13" in "iphone 13 charger") help ranking but aren't required: a model
+ *  number shouldn't hide the right charger. Brand words are handled apart. */
+export function requiredWords(
+  tokens: string[],
+  tokenTerms: string[][],
+  brandTokens: ReadonlySet<string>,
+): string[][] {
+  return tokenTerms.filter((_, i) => {
+    const t = tokens[i];
+    return t !== undefined && !brandTokens.has(t) && !/^\d+$/.test(t);
+  });
+}
+
+export function wordCoverage(text: string, tokenTerms: string[][]): number {
+  let covered = 0;
+  for (const alts of tokenTerms) {
+    if (alts.some((t) => hasWord(text, t)) || hasNearWord(text, alts[0]!)) covered++;
+  }
+  return covered;
 }
 
 function bigrams(s: string): Set<string> {
@@ -118,6 +207,8 @@ export function detectBrands(
   brands: readonly string[],
 ): {
   requested: Map<string, string>;
+  /** Query words that named a brand (so coverage can leave them out). */
+  brandTokens: Set<string>;
   mergedTerms: string[];
   mergedTokens: string[];
   typeTerms: string[];
@@ -162,5 +253,5 @@ export function detectBrands(
     (t) => t !== norm && !brandTokens.has(t) && !brandTokens.has(singular(t)),
   );
 
-  return { requested, mergedTerms, mergedTokens, typeTerms };
+  return { requested, brandTokens, mergedTerms, mergedTokens, typeTerms };
 }

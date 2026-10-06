@@ -44,9 +44,19 @@ export async function GET(req: NextRequest) {
     const requestedLga = req.nextUrl.searchParams.get("lga")?.trim();
 
     const matchedState = canonicalStateName(requestedState);
-    const zone =
-      (requestedLga ? await findZoneForArea(requestedState, requestedLga) : null) ??
-      (await findZoneForState(requestedState));
+    const areaZone = requestedLga ? await findZoneForArea(requestedState, requestedLga) : null;
+    const zone = areaZone ?? (await findZoneForState(requestedState));
+    // They named an area we have no separate price for: this is the state's
+    // general rate, and the agent must not present it as that area's price.
+    const areaNote =
+      requestedLga && !areaZone
+        ? {
+            areaMatched: false,
+            areaMessage: `We don't have a specific delivery price for "${requestedLga}", so this is the general ${matchedState ?? requestedState} rate. Say it's the usual rate for ${matchedState ?? requestedState}, and that the shop will confirm the exact fee for ${requestedLga} if it differs.`,
+          }
+        : requestedLga
+          ? { areaMatched: true }
+          : {};
 
     if (zone) {
       const freeOver = zone.freeOverKobo == null ? null : Number(zone.freeOverKobo);
@@ -61,6 +71,7 @@ export async function GET(req: NextRequest) {
           freeOver: freeOver != null ? formatMoney(freeOver) : null,
           qualifiesForFreeShipping: qualifiesFree,
           fallback: false,
+          ...areaNote,
         }),
       );
     }
@@ -77,6 +88,7 @@ export async function GET(req: NextRequest) {
           freeOver: null,
           qualifiesForFreeShipping: false,
           fallback: true,
+          ...areaNote,
         }),
       );
     }
