@@ -10,7 +10,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchProductsDetailed, listProducts } from "@/lib/data/products";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
-import { formatMoney } from "@/lib/money";
+import { priceFields } from "@/lib/ai/price-fields";
 import { env } from "@/lib/env";
 import { SITE } from "@/lib/site";
 
@@ -32,28 +32,25 @@ export async function GET(req: NextRequest) {
     // When `q` is short or missing, return category top picks so the agent
     // has something to suggest. When `q` is set, run the substring search.
     let products;
-    let requestedBrands: string[] = [];
+    let partial = false;
+    let missing: string[] = [];
     if (q.length >= 2) {
       const found = await searchProductsDetailed(q, limit);
-      requestedBrands = found.requestedBrands;
-      const wanted = new Set(requestedBrands.map((b) => b.toLowerCase()));
+      partial = found.partial;
+      missing = found.missing;
       products = found.hits.map((p) => ({
         id: p.id,
         slug: p.slug,
         productUrl: `${appBaseUrl}/product/${p.slug}`,
         name: p.name,
         brand: p.brand,
-        ...(wanted.size > 0 && { isRequestedBrand: wanted.has(p.brand.toLowerCase()) }),
         category: p.category,
         categoryName: p.categoryName,
         description: p.shortDesc,
         status: p.stock > 0 ? "In stock" : "Out of stock",
         // Human-readable Naira — the LLM must never see raw kobo (it reports
         // it as Naira → 100× inflated "millions"). Currency is always NGN.
-        price: formatMoney(Number(p.priceKobo)),
-        ...(p.saleActive && p.saleKobo != null && {
-          salePrice: formatMoney(Number(p.saleKobo)),
-        }),
+        ...priceFields(Number(p.priceKobo), p.saleKobo, p.saleActive),
         inStock: p.stock > 0,
         stock: p.stock,
         imageUrl: p.imageUrl,
@@ -74,10 +71,7 @@ export async function GET(req: NextRequest) {
         categoryName: p.category,
         description: p.short,
         status: p.stock > 0 ? "In stock" : "Out of stock",
-        price: formatMoney(p.price),
-        ...(p.saleActive && p.sale != null && {
-          salePrice: formatMoney(p.sale),
-        }),
+        ...priceFields(p.price, p.sale, p.saleActive),
         inStock: p.stock > 0,
         stock: p.stock,
         imageUrl: p.imageUrl,
@@ -88,30 +82,23 @@ export async function GET(req: NextRequest) {
     // next to an empty array is easy to misread as "we have it". Say it in
     // words, and do the same when everything that matched is out of stock.
     const inStockCount = products.filter((p) => p.inStock).length;
-    // When they named a brand, other brands in the list are alternatives only.
-    const brandLabel = requestedBrands.join(" / ");
-    const ofBrand = products.filter((p) => "isRequestedBrand" in p && p.isRequestedBrand);
-    const brandMessage =
-      requestedBrands.length === 0 || products.length === 0
-        ? undefined
-        : ofBrand.length === 0
-          ? `The customer asked for ${brandLabel}, but nothing from ${brandLabel} matched. These are OTHER brands: say we don't have ${brandLabel} for this, then offer them as alternatives. Never call them ${brandLabel}.`
-          : `The customer asked for ${brandLabel}. Only items with isRequestedBrand: true are ${brandLabel}${ofBrand.some((p) => p.inStock) ? "" : " (all of them out of stock right now)"}. Any others are different brands: offer them only as alternatives and name their real brand.`;
     const message =
       products.length === 0
         ? `No products matched "${q}". We do not have this in our catalogue. Tell the customer plainly, suggest another word or brand, or call list_categories. Do NOT say it is available.`
-        : inStockCount === 0
-          ? "Every product that matched is OUT OF STOCK. Do not offer them as available. Say so, and offer close alternatives (recommend_products) or to notify them when it is back."
-          : brandMessage;
+        : partial
+          ? `No product matches all of "${q}": the closest (below) don't mention ${missing.map((w) => `"${w}"`).join(" or ") || "part of it"}. Tell the customer that honestly (e.g. "none of these list ${missing[0] ?? "that"}"), offer them only if still close, and never claim they have ${missing[0] ?? "it"}.`
+          : inStockCount === 0
+            ? "Every product that matched is OUT OF STOCK. Do not offer them as available. Say so, and offer close alternatives (recommend_products) or to notify them when it is back."
+            : undefined;
 
     return NextResponse.json(
       apiSuccess({
         query: q,
         ...(category && { category }),
         found: products.length > 0,
+        ...(partial && { exactMatch: false, notFound: missing }),
         count: products.length,
         inStockCount,
-        ...(requestedBrands.length > 0 && { requestedBrands }),
         ...(message && { message }),
         products,
       }),

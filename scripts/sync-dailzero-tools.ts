@@ -53,18 +53,25 @@ async function checkTokenOnProd(token: string): Promise<void> {
 }
 
 /**
- * The tool list sends Naira (`offer`, `amount`, `subtotal`), which only the
- * endpoints from the same change understand. Pushing it at an older deploy
- * would break negotiate/payments, so probe first: a new endpoint answers a
- * made-up product with 404, an old one with 400 "offerKobo: Required".
+ * The tool list only works against endpoints from the same change: it sends
+ * Naira (`offer`) and line items as a JSON string. Pushing it at an older
+ * deploy would break negotiate and every cart/order tool, so probe both with a
+ * made-up product: current endpoints answer 404 (no such product), older ones
+ * 400 (wrong input shape).
  */
-async function siteHasNairaInputs(): Promise<boolean> {
-  const res = await fetch(`${baseUrl}/api/v1/ai/tools/negotiate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ productSlug: `sync-check-${Date.now()}`, offer: 1000 }),
-  });
-  return res.status === 404;
+async function siteRunsTheseTools(token: string): Promise<boolean> {
+  const post = (path: string, body: unknown) =>
+    fetch(`${baseUrl}/api/v1/ai/tools/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    }).then((r) => r.status);
+  const slug = `sync-check-${Date.now()}`;
+  const [negotiate, quote] = await Promise.all([
+    post("negotiate", { productSlug: slug, offer: 1000 }),
+    post("cart/quote", { items: JSON.stringify([{ productSlug: slug, quantity: 1 }]) }),
+  ]);
+  return negotiate === 404 && quote === 404;
 }
 
 async function main() {
@@ -80,11 +87,6 @@ async function main() {
 
   console.log(`Site: ${baseUrl}`);
   console.log(`Mode: ${apply ? "APPLY" : "dry run (add --apply to push)"}`);
-  if (!(await siteHasNairaInputs())) {
-    const msg = `${baseUrl} is still running the older tool endpoints (they want kobo, these tools send Naira). Deploy this change first, then sync.`;
-    if (apply) fail(msg);
-    console.log(`⚠ ${msg}`);
-  }
   console.log("");
 
   const backupDir = join(process.cwd(), "tmp", "dailzero");
@@ -111,6 +113,11 @@ async function main() {
       checkedTokens.add(token);
     }
     console.log("   token: accepted by the live site");
+    if (!(await siteRunsTheseTools(token))) {
+      const msg = `${baseUrl} is still running older tool endpoints than this tool list expects. Deploy this change first, then sync.`;
+      if (apply) fail(msg);
+      console.log(`   ⚠ ${msg}`);
+    }
 
     const desired = buildAvmallTools(baseUrl, token);
     if (desired.length > DAILZERO_MAX_TOOLS) fail(`${desired.length} tools; Dailzero allows ${DAILZERO_MAX_TOOLS}.`);

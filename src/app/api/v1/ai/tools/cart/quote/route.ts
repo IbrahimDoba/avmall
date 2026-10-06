@@ -27,6 +27,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { lineItemsInput } from "@/lib/ai/tool-input";
 import { db, hasDatabase } from "@/lib/db";
 import { computeQuote, type QuoteInputLine } from "@/lib/cart-quote";
 import { resolveShipping } from "@/lib/shipping-zone";
@@ -38,15 +39,8 @@ import { formatMoney } from "@/lib/money";
 export const runtime = "nodejs";
 
 const bodySchema = z.object({
-  items: z
-    .array(
-      z.object({
-        productSlug: z.string().min(1),
-        variantId: z.string().uuid().optional(),
-        quantity: z.number().int().positive(),
-      }),
-    )
-    .min(1),
+  // An array, or a JSON string of one (Dailzero can't send arrays).
+  items: lineItemsInput,
   state: z.string().min(1).optional(),
   lga: z.string().min(1).optional(),
   couponCode: z.string().min(1).optional(),

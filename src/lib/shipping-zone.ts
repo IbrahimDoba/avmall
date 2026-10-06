@@ -94,7 +94,33 @@ export async function findZoneForArea(stateInput: string, lgaInput: string) {
   const match = areas.find(
     (a) => stateKey(a.state) === sKey && lgaKey(a.lga) === lKey,
   );
-  return match?.zone ?? null;
+  if (match) return match.zone;
+
+  // Not an LGA, maybe a neighbourhood. Areas can only be LGAs, so zones for
+  // parts of a town are NAMED after them ("Samaru axis", "Zaria City/Sabo"),
+  // and that's what a customer types. Match those names within the state.
+  const zones = await db.shippingZone.findMany({
+    where: { active: true },
+    include: { areas: true },
+    orderBy: { createdAt: "asc" },
+  });
+  return (
+    zones.find(
+      (z) =>
+        (z.states.some((st) => stateKey(st) === sKey) ||
+          z.areas.some((a) => stateKey(a.state) === sKey)) &&
+        zoneNamePlaces(z.name).includes(lKey),
+    ) ?? null
+  );
+}
+
+/** The places a zone's name lists, as lgaKeys: "Zaria City/Sabo" → ["zariacity",
+ *  "sabo"], "Samaru axis" → ["samaru"]. Generic names ("Zone 1") list none. */
+export function zoneNamePlaces(name: string): string[] {
+  return name
+    .split(/[/,&]|\band\b/i)
+    .map((part) => lgaKey(part.replace(/\b(axis|area|areas|environs|and environs)\b/gi, "")))
+    .filter((k) => k.length >= 3 && !/^zone\d*$/.test(k) && !/^fallback/.test(k));
 }
 
 export interface ResolvedShipping {

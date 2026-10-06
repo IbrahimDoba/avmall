@@ -10,6 +10,7 @@ import "server-only";
 
 import { cache } from "react";
 import { db, hasDatabase, withRetry } from "@/lib/db";
+import { planSearch, scoreProduct, selectHits, type SearchPlan } from "@/lib/search-terms";
 import { SEED_PRODUCT_IMAGE_BY_SLUG } from "@/lib/seed-product-images";
 import {
   type Product,
@@ -425,102 +426,6 @@ export interface ProductSearchHit {
   }[];
 }
 
-/**
- * Synonym / alias groups for catalogue search. If any member of a group shows
- * up in the shopper's query, the whole group joins the search — so "power bank"
- * also finds an item that only says so in its description or is tagged a
- * "charger" / "battery pack", and "earphones" finds "earbuds" / "headphones".
- * Tuned for this store's mix (phones, audio, power, fans, home & kitchen);
- * extend freely — order within a group doesn't matter.
- */
-const SEARCH_SYNONYMS: readonly (readonly string[])[] = [
-  ["power bank", "powerbank", "portable charger", "battery pack", "backup battery", "power"],
-  ["charger", "adapter", "adaptor", "charging", "fast charger", "wall charger"],
-  ["cable", "cord", "usb cable", "charging cable", "type c", "lightning cable"],
-  ["earphone", "earbud", "earbuds", "headphone", "headphones", "headset", "airpod", "airpods", "handsfree", "audio"],
-  ["speaker", "bluetooth speaker", "sound", "soundbar", "boombox"],
-  ["fan", "rechargeable fan", "standing fan", "table fan", "cooling fan", "cooler"],
-  ["phone", "smartphone", "android", "mobile", "handset"],
-  ["tablet", "tab", "ipad"],
-  ["smartwatch", "smart watch", "watch", "fitness band"],
-  ["television", "tv", "smart tv"],
-  ["blender", "mixer", "grinder", "smoothie maker"],
-  ["kettle", "electric kettle"],
-  ["iron", "pressing iron", "steam iron"],
-  ["torch", "flashlight", "rechargeable light", "rechargeable lamp", "lantern"],
-  ["generator", "inverter", "power station"],
-  ["memory card", "sd card", "flash drive", "pendrive", "usb drive"],
-];
-
-/** Filler words dropped from a query before matching, so "do you have a good
- *  power bank" searches on {power, bank}, not the whole sentence. */
-const SEARCH_STOPWORDS = new Set([
-  "the", "a", "an", "of", "for", "to", "and", "or", "with", "in", "on", "my", "me", "i", "is", "are", "am", "be",
-  "do", "you", "have", "need", "needed", "want", "get", "got", "looking", "look", "show", "find", "buy", "sell",
-  "some", "any", "good", "best", "new", "cheap", "affordable", "quality", "original", "genuine", "please", "pls",
-  "abeg", "this", "that", "your", "their", "there", "it", "can", "could", "would", "like", "one", "ones", "us", "we",
-  "product", "products", "item", "items", "available", "stock",
-]);
-
-function normalizeText(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-}
-
-/**
- * Expand a raw query into terms to match against the catalogue: the full
- * phrase, its non-stopword tokens, and every triggered synonym-group member.
- */
-/** Crude singular: drop a trailing "s" from words of 4+ chars so "earphones"
- *  matches "earphone". Good enough for retail nouns; avoids a stemmer dep. */
-function singular(w: string): string {
-  return w.length > 3 && w.endsWith("s") ? w.slice(0, -1) : w;
-}
-
-function expandSearchTerms(query: string): { tokens: string[]; terms: string[]; norm: string } {
-  const norm = normalizeText(query);
-  const tokens = norm.split(" ").filter((t) => t.length >= 2 && !SEARCH_STOPWORDS.has(t));
-  const terms = new Set<string>();
-  if (norm) terms.add(norm);
-  for (const t of tokens) {
-    terms.add(t);
-    const sg = singular(t);
-    if (sg !== t) terms.add(sg); // "earphones" also matches an "Earphone" product
-  }
-  // Trigger a synonym group only on a real match: the group phrase appearing in
-  // the query, or a token equal to a group term (singular-insensitive). Looser
-  // substring matching wrongly pulled "earphones" into the phone group, etc.
-  for (const group of SEARCH_SYNONYMS) {
-    const triggered = group.some(
-      (g) =>
-        // Multi-word group terms ("power bank") match as a phrase; single words
-        // must equal a whole token, so "earphones" can't trigger via "phone".
-        (g.includes(" ") && norm.length >= 3 && norm.includes(g)) ||
-        tokens.some((t) => g === t || singular(g) === singular(t)),
-    );
-    if (triggered) for (const g of group) terms.add(g);
-  }
-  const effectiveTokens = tokens.length ? tokens : norm ? [norm] : [];
-  // Cap the term set so the OR query stays bounded.
-  return { tokens: effectiveTokens, terms: [...terms].slice(0, 20), norm };
-}
-
-function bigrams(s: string): Set<string> {
-  const out = new Set<string>();
-  for (let i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2));
-  return out;
-}
-
-/** Dice coefficient over character bigrams — a cheap typo-similarity in [0,1].
- *  "orimo" vs "oraimo" ≈ 0.67, so a misspelled brand still matches. */
-function diceSim(a: string, b: string): number {
-  if (a === b) return 1;
-  if (a.length < 2 || b.length < 2) return 0;
-  const A = bigrams(a);
-  const B = bigrams(b);
-  let inter = 0;
-  for (const g of A) if (B.has(g)) inter++;
-  return (2 * inter) / (A.size + B.size);
-}
 
 // Distinct brand list, cached briefly in-memory (brands change rarely). Search
 // matches the query against it on every call, so the cache is what keeps that cheap.
@@ -558,36 +463,20 @@ export async function searchProductsDetailed(
   query: string,
   limit = 8,
   storeId?: string,
-): Promise<{ hits: ProductSearchHit[]; requestedBrands: string[] }> {
-  const { tokens, terms, norm } = expandSearchTerms(query);
-  if (terms.length === 0 || !hasDatabase) return { hits: [], requestedBrands: [] };
-
-  // Brands named in the query — exactly, as a phrase ("new age"), or misspelled
-  // ("orimo" → Oraimo, Dice ≥ 0.6 on 4+ letter words). One word containing the
-  // other is NOT a typo — "phone" vs a brand "iPhone" scores 0.89 but means any
-  // phone — and substring search already finds those, so it's excluded.
-  const isTypoOf = (t: string, bn: string) =>
-    t.length >= 4 && !bn.includes(t) && !t.includes(bn) && diceSim(t, bn) >= 0.6;
-  const requested = new Map<string, string>(); // normalised → as stored
-  for (const b of await knownBrands()) {
-    const bn = normalizeText(b);
-    if (bn.length < 3) continue;
-    const named =
-      tokens.includes(bn) ||
-      (bn.includes(" ") && norm.includes(bn)) ||
-      tokens.some((t) => isTypoOf(t, bn));
-    if (named && !requested.has(bn)) requested.set(bn, b);
-  }
-  const brandNorms = new Set(requested.keys());
-
-  // Misspelled brands also become search terms, or the candidate query (a
-  // substring match) would never find them at all.
-  const corrections = [...brandNorms].filter((bn) => !tokens.includes(bn) && !norm.includes(bn));
-  const mergedTerms = [...new Set([...terms, ...corrections])].slice(0, 24);
-  const mergedTokens = [...new Set([...tokens, ...corrections])];
-
-  const hits = await queryProductHits(mergedTerms, mergedTokens, norm, limit, storeId, brandNorms);
-  return { hits, requestedBrands: [...requested.values()] };
+): Promise<{
+  hits: ProductSearchHit[];
+  requestedBrands: string[];
+  /** Nothing matched every word asked for; `hits` only match some of it. */
+  partial: boolean;
+  /** When partial: the words the hits don't mention ("bass"). */
+  missing: string[];
+}> {
+  const none = { hits: [], requestedBrands: [], partial: false, missing: [] };
+  if (!hasDatabase) return none;
+  const plan = planSearch(query, await knownBrands());
+  if (!plan) return none;
+  const { hits, partial, missing } = await queryProductHits(plan, limit, storeId);
+  return { hits, requestedBrands: plan.brandNames, partial, missing };
 }
 
 /** Lightweight product shape for the admin category picker. A subset of
@@ -653,18 +542,14 @@ export async function browseProductsForCategory(
 /** Run the OR search over the given terms and rank the hits. Shared by the
  *  normal search and the fuzzy-corrected retry. */
 async function queryProductHits(
-  terms: string[],
-  tokens: string[],
-  norm: string,
+  plan: SearchPlan,
   limit: number,
   storeId?: string,
-  /** Normalised brands the shopper named — their products rank first. */
-  requestedBrands: ReadonlySet<string> = new Set(),
-): Promise<ProductSearchHit[]> {
+): Promise<{ hits: ProductSearchHit[]; partial: boolean; missing: string[] }> {
   // Broad candidate net: any expanded term in ANY searchable field — name,
   // brand, slug, both descriptions, the category, or an exact tag. This is what
   // lets "power bank" find a product that only says so in its details, not name.
-  const or: Prisma.ProductWhereInput[] = terms.flatMap((term) => [
+  const or: Prisma.ProductWhereInput[] = plan.terms.flatMap((term) => [
     { name: { contains: term, mode: "insensitive" } },
     { brand: { contains: term, mode: "insensitive" } },
     { slug: { contains: term, mode: "insensitive" } },
@@ -673,87 +558,88 @@ async function queryProductHits(
     { category: { name: { contains: term, mode: "insensitive" } } },
     { category: { slug: { contains: term, mode: "insensitive" } } },
   ]);
-  or.push({ tags: { hasSome: terms } });
+  or.push({ tags: { hasSome: plan.terms } });
 
-  const rows = await withRetry(() =>
-    db.product.findMany({
-      where: {
-        archivedAt: null,
-        published: true,
-        OR: or,
+  const include = {
+    variants: {
+      orderBy: { position: "asc" },
+      select: {
+        id: true,
+        label: true,
+        priceKobo: true,
+        storeStock: {
+          ...(storeId ? { where: { storeId } } : {}),
+          select: { onHand: true },
+        },
       },
-      include: {
-        variants: {
-          orderBy: { position: "asc" },
-          select: {
-            id: true,
-            label: true,
-            priceKobo: true,
-            storeStock: {
-              ...(storeId ? { where: { storeId } } : {}),
-              select: { onHand: true },
-            },
+    },
+    category: { select: { slug: true, name: true } },
+    images: {
+      orderBy: [{ isPrimary: "desc" }, { position: "asc" }],
+      take: 1,
+      select: { key: true },
+    },
+  } satisfies Prisma.ProductInclude;
+
+  const fetchPool = (where: Prisma.ProductWhereInput, take: number) =>
+    withRetry(() =>
+      db.product.findMany({
+        where: { archivedAt: null, published: true, ...where },
+        include,
+        // Pull a generous pool ordered by prominence, then rank for relevance
+        // below — Postgres can't score our token/synonym logic.
+        orderBy: [{ featured: "desc" }, { createdAt: "desc" }],
+        take,
+      }),
+    );
+
+  // The broad net is capped, so with a common word in the query ("power") the
+  // named brand's own matches can fall outside it. Fetch those separately: that
+  // brand's products that also match the rest of the query.
+  const typeOr: Prisma.ProductWhereInput[] = plan.typeTerms.flatMap((term) => [
+    { name: { contains: term, mode: "insensitive" } },
+    { shortDesc: { contains: term, mode: "insensitive" } },
+    { category: { name: { contains: term, mode: "insensitive" } } },
+  ]);
+  if (plan.typeTerms.length) typeOr.push({ tags: { hasSome: plan.typeTerms } });
+  const [broad, branded] = await Promise.all([
+    fetchPool({ OR: or }, Math.max(limit * 8, 50)),
+    plan.brandNames.length
+      ? fetchPool(
+          {
+            AND: [
+              { OR: plan.brandNames.map((b) => ({ brand: { equals: b, mode: "insensitive" as const } })) },
+              ...(typeOr.length ? [{ OR: typeOr }] : []),
+            ],
           },
-        },
-        category: { select: { slug: true, name: true } },
-        images: {
-          orderBy: [{ isPrimary: "desc" }, { position: "asc" }],
-          take: 1,
-          select: { key: true },
-        },
-      },
-      // Pull a generous pool ordered by prominence, then rank for relevance
-      // below — Postgres can't score our token/synonym logic.
-      orderBy: [{ featured: "desc" }, { createdAt: "desc" }],
-      take: Math.max(limit * 8, 50),
-    }),
-  );
+          50,
+        )
+      : Promise.resolve([]),
+  ]);
+  const seen = new Set<string>();
+  const rows = [...branded, ...broad].filter((p) => !seen.has(p.id) && !!seen.add(p.id));
 
-  // Relevance: the shopper's own words weigh most, and a hit in the name beats
-  // one buried in the long description; synonyms count for less than real words.
-  const scoreOf = (p: (typeof rows)[number]): number => {
-    const name = `${p.name} ${p.brand}`.toLowerCase();
-    const short = p.shortDesc.toLowerCase();
-    const long = p.longDesc.toLowerCase();
-    const cat = `${p.category.name} ${p.category.slug}`.toLowerCase();
-    const tagset = p.tags.map((t) => t.toLowerCase());
-    let s = 0;
-    if (norm.length >= 3 && name.includes(norm)) s += 100; // whole phrase, in the name
-    for (const t of tokens) {
-      if (name.includes(t)) s += 10;
-      if (tagset.includes(t)) s += 8;
-      if (cat.includes(t)) s += 6;
-      if (short.includes(t)) s += 4;
-      if (long.includes(t)) s += 2;
-    }
-    for (const term of terms) {
-      if (term === norm || tokens.includes(term)) continue; // real words already scored
-      if (name.includes(term)) s += 5;
-      else if (cat.includes(term)) s += 4;
-      else if (tagset.includes(term)) s += 4;
-      else if (short.includes(term)) s += 3;
-      else if (long.includes(term)) s += 1;
-    }
-    // The brand they asked for outweighs everything below, stock included: an
-    // out-of-stock Oraimo is the honest answer to "oraimo power bank", and the
-    // in-stock boost would otherwise hand that slot to another brand.
-    if (requestedBrands.has(normalizeText(p.brand))) s += 30;
-    // Lead with what's actually in stock — a moderate boost, so a strong exact
-    // match that happens to be out of stock still shows, just lower.
-    const stk = p.variants.reduce((a, v) => a + v.storeStock.reduce((b, ss) => b + ss.onHand, 0), 0);
-    if (stk > 0) s += 8;
-    if (p.featured) s += 3;
-    return s;
-  };
-
-  return rows
+  const scored = rows
     // Store-scoped search hides products not stocked at that store.
     .filter((p) => (storeId ? p.variants.some((v) => v.storeStock.length > 0) : true))
-    .map((p) => ({ p, s: scoreOf(p) }))
-    .filter((x) => x.s > 0)
-    .sort((a, b) => b.s - a.s || Number(b.p.featured) - Number(a.p.featured))
-    .slice(0, limit)
-    .map(({ p }) => {
+    .map((p) => ({
+      p,
+      featured: p.featured,
+      ...scoreProduct(plan, {
+        name: p.name,
+        brand: p.brand,
+        shortDesc: p.shortDesc,
+        longDesc: p.longDesc,
+        categoryName: p.category.name,
+        categorySlug: p.category.slug,
+        tags: p.tags,
+        inStock: p.variants.some((v) => v.storeStock.some((ss) => ss.onHand > 0)),
+        featured: p.featured,
+      }),
+    }));
+  const { kept, partial, missing } = selectHits(plan, scored, limit);
+
+  const hits = kept.map(({ p }) => {
       const r2Url = p.images[0] ? publicUrlForKey(p.images[0].key) : null;
       return {
         id: p.id,
@@ -779,6 +665,7 @@ async function queryProductHits(
         })),
       };
     });
+  return { hits, partial, missing };
 }
 
 /**

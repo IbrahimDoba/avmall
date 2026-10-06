@@ -13,7 +13,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { formatMoney } from "@/lib/money";
+import { priceFields } from "@/lib/ai/price-fields";
 import {
   getProductBySlug,
   getRelatedProducts,
@@ -80,8 +80,7 @@ export async function GET(req: NextRequest) {
           name: p.name,
           brand: p.brand,
           category: p.category,
-          price: formatMoney(p.price),
-          ...(p.saleActive && p.sale != null && { salePrice: formatMoney(p.sale) }),
+          ...priceFields(p.price, p.sale, p.saleActive),
           status: p.stock > 0 ? "In stock" : "Out of stock",
           inStock: p.stock > 0,
           stock: p.stock,

@@ -19,13 +19,10 @@
  * tsx. It holds no secrets; the token is passed in.
  */
 
-export type DailzeroParamType =
-  | "string"
-  | "integer"
-  | "number"
-  | "boolean"
-  | "array"
-  | "object";
+/** All Dailzero accepts — no arrays or objects. Line items therefore go as a
+ *  JSON string and an order's contact/address as flat fields (see
+ *  lib/ai/tool-input, which the endpoints parse them with). */
+export type DailzeroParamType = "string" | "integer" | "number" | "boolean";
 
 export interface DailzeroToolParam {
   name: string;
@@ -51,7 +48,10 @@ export const DAILZERO_MAX_TOOLS = 50;
 // ── Shared description fragments ─────────────────────────────────────────────
 
 const MONEY_NOTE =
-  "All prices come back as Naira strings (e.g. \"₦4,500\") — quote them exactly as given, never multiply or convert.";
+  "All prices come back as Naira strings (e.g. \"₦4,500\") — quote them exactly as given, never multiply or convert. `price` is ALWAYS what the customer pays today; `regularPrice` appears only when on sale and is the old, higher price (write it as \"₦8,400, was ₦12,500\").";
+
+const FACTS_NOTE =
+  "Only state facts the tool returned. Never invent colours, sizes, specs, battery life, warranty, or whether something is 'original' — if the data doesn't say, say you don't have that detail and offer the product link.";
 
 const LINK_NOTE =
   "Each product has a productUrl: share that link so the customer can view it. Never paste imageUrl and never try to send images.";
@@ -60,7 +60,7 @@ const STOCK_NOTE =
   "Only call a product available when inStock is true. Out of stock is out of stock, even if the product is listed.";
 
 const ITEMS_SHAPE =
-  'JSON array of line items, each {"productSlug": "<slug exactly as a product tool returned it>", "quantity": <whole number ≥ 1>, "variantId": "<only for products with variants: the variants[].id from get_product>"}. Example: [{"productSlug":"oraimo-20000mah-power-bank","quantity":2}]';
+  'The items as a JSON array written as text, each {"productSlug": "<slug exactly as a product tool returned it>", "quantity": <whole number ≥ 1>, "variantId": "<only for products with variants: the variants[].id from get_product>"}. Example: [{"productSlug":"oraimo-20000mah-power-bank","quantity":2}]';
 
 // ── The tools ────────────────────────────────────────────────────────────────
 
@@ -84,9 +84,10 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       description: [
         "Search the live Avmall catalogue. Matches product name, brand, category, description and common synonyms (e.g. 'power bank' finds 'portable charger'), and tolerates brand typos ('orimo' → Oraimo). In-stock items rank first.",
         "ALWAYS call this before saying whether we sell something — never answer from memory.",
-        "Returns found, count, inStockCount and products[] (name, brand, categoryName, description, price, salePrice, status, inStock, stock, productUrl, slug). If found is false, we do NOT stock it: say so. When the customer names a brand, the response lists requestedBrands and marks each product isRequestedBrand: only those are that brand — never describe another brand's product as the one they asked for. If a message field is present, follow it.",
+        "Returns found, count, inStockCount and products[] (name, brand, categoryName, description, price, regularPrice, status, inStock, stock, productUrl, slug). If found is false, we do NOT stock it: say so. If exactMatch is false, no product matches every word: notFound lists the words nothing mentions (e.g. 'bass', 'pepper') — say so honestly and never claim the products have them. Name each product's real brand; never describe one brand's product as another's. If a message field is present, follow it.",
         STOCK_NOTE,
         MONEY_NOTE,
+        FACTS_NOTE,
         LINK_NOTE,
       ].join(" "),
       parameters: [
@@ -112,10 +113,11 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       method: "GET",
       url: `${api}/products/{slug}`,
       description: [
-        "Full live detail for ONE product: price, salePrice, inStock and stock, variants (each with id, label, stock and its own price if different), bulkTiers (quantity discounts), negotiable, preorder, moq and eta.",
+        "Full live detail for ONE product: price, regularPrice, inStock and stock, variants (each with id, label, stock and its own price if different), bulkTiers (quantity discounts), negotiable, preorder, moq and eta.",
         "Call it before quoting a specific product's price, stock or options, and to get variant ids for cart and order tools. A 404 means the product does not exist or is no longer sold.",
         STOCK_NOTE,
         MONEY_NOTE,
+        FACTS_NOTE,
         LINK_NOTE,
       ].join(" "),
       parameters: [
@@ -137,6 +139,7 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
         "Returns found, count and products[]. If found is false, do not invent suggestions.",
         STOCK_NOTE,
         MONEY_NOTE,
+        FACTS_NOTE,
         LINK_NOTE,
       ].join(" "),
       parameters: [
@@ -155,6 +158,19 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       parameters: [],
     },
 
+    {
+      name: "get_store_info",
+      displayName: "Shop details",
+      method: "GET",
+      url: `${api}/store`,
+      description: [
+        "Avmall's shop address, phone, WhatsApp (with a tap-to-chat whatsappLink) and email, live from the store's settings.",
+        "Call it when the customer asks where the shop is, how to call or reach someone, or wants a human / staff / manager: give them the whatsappLink, never pretend to transfer them.",
+        "It doesn't list opening hours or pickup: never guess those, point them to WhatsApp.",
+      ].join(" "),
+      parameters: [],
+    },
+
     // ── Delivery ──
     {
       name: "quote_shipping",
@@ -164,7 +180,7 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       description: [
         "Delivery fee and delivery time to one Nigerian state, optionally a specific LGA/area within it (some areas, e.g. parts of Kaduna, are priced differently from the rest of the state — pass lga whenever the customer names one).",
         "Accepts messy state names ('abuja', 'lagos state', 'Akwa-Ibom') and returns matchedState: reuse that EXACT value as state in quote_cart and create_order so the totals agree.",
-        "May return unavailable: true when we do not deliver there — then say so and offer the WhatsApp contact; never make up a fee.",
+        "May return unavailable: true when we do not deliver there — then say so and offer the WhatsApp contact; never make up a fee. If areaMatched is false, the fee is the state's general rate, not a price for that area: follow areaMessage.",
         MONEY_NOTE,
       ].join(" "),
       parameters: [
@@ -199,11 +215,12 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       description: [
         "The AUTHORITATIVE total for a set of items: subtotal, bulk discount, coupon discount, delivery and total, using live prices and stock.",
         "ALWAYS call this before telling the customer a total; never add prices up yourself. Pass the matchedState from quote_shipping as state.",
+        "Only price what the customer actually chose. If they are still comparing options, ask which one first: never add alternatives together into one total.",
         "It prices items but does NOT check stock, so confirm inStock with search_products or get_product first. An error naming a product means that slug does not exist.",
         MONEY_NOTE,
       ].join(" "),
       parameters: [
-        { name: "items", type: "array", description: ITEMS_SHAPE, required: true },
+        { name: "items", type: "string", description: ITEMS_SHAPE, required: true },
         { name: "state", type: "string", description: "Delivery state (the matchedState from quote_shipping)." },
         { name: "lga", type: "string", description: "Delivery LGA/area, when the customer gave one." },
         { name: "couponCode", type: "string", description: "Coupon code, only if the customer gave one." },
@@ -215,8 +232,8 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       method: "POST",
       url: `${api}/cart/prepare`,
       description:
-        "Build a link that opens the website with these items already in the customer's cart, so they can check out and pay themselves. The simplest way to close a sale: prefer it over create_order unless the customer wants you to place the order for them. Returns cartUrl: share it exactly as returned.",
-      parameters: [{ name: "items", type: "array", description: ITEMS_SHAPE, required: true }],
+        "Build a link that opens the website with these items already in the customer's cart, so they can check out and pay themselves. The simplest way to close a sale: prefer it over create_order unless the customer wants you to place the order for them. Returns cartUrl: share it exactly as returned. Use it whenever they say 'add to cart', 'send me the link' or 'how do I buy/pay' for a product they've picked — with quantity 1 unless they said otherwise, instead of asking again.",
+      parameters: [{ name: "items", type: "string", description: ITEMS_SHAPE, required: true }],
     },
     {
       name: "negotiate_price",
@@ -251,19 +268,22 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
         MONEY_NOTE,
       ].join(" "),
       parameters: [
-        { name: "items", type: "array", description: ITEMS_SHAPE, required: true },
+        { name: "items", type: "string", description: ITEMS_SHAPE, required: true },
+        { name: "customerName", type: "string", description: "Buyer's full name.", required: true },
         {
-          name: "contact",
-          type: "object",
-          description:
-            'Buyer contact as {"name": "<full name>", "phone": "<Nigerian phone, any format>", "email": "<optional>"}.',
+          name: "customerPhone",
+          type: "string",
+          description: "Buyer's Nigerian phone number, any format (0803…, +234803…).",
           required: true,
         },
+        { name: "customerEmail", type: "string", description: "Buyer's email, only if they gave one." },
+        { name: "addressLine1", type: "string", description: "Street address for delivery.", required: true },
+        { name: "addressLine2", type: "string", description: "Landmark or extra directions, if given." },
+        { name: "city", type: "string", description: "LGA or area, e.g. 'Ikeja', 'Kawo'.", required: true },
         {
-          name: "shipping",
-          type: "object",
-          description:
-            'Delivery address as {"line1": "<street address>", "line2": "<optional landmark>", "city": "<LGA or area>", "state": "<the matchedState from quote_shipping>"}.',
+          name: "state",
+          type: "string",
+          description: "Delivery state: the matchedState from quote_shipping.",
           required: true,
         },
         { name: "couponCode", type: "string", description: "Coupon code, only if the customer gave one." },

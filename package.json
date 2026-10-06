@@ -11,6 +11,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "check:boundaries": "tsx scripts/check-client-boundary.ts",
+    "check:search": "tsx scripts/check-search-terms.ts",
     "ai:sync-tools": "tsx --env-file=.env.local scripts/sync-dailzero-tools.ts",
     "verify": "pnpm run typecheck && pnpm run check:boundaries",
     "clean": "rm -rf .next .turbo",

@@ -24,6 +24,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { lineItemsInput, nestOrderFields } from "@/lib/ai/tool-input";
 import { db, hasDatabase } from "@/lib/db";
 import { requireAiAgent } from "@/lib/ai-auth";
 import { computeQuote, type QuoteInputLine } from "@/lib/cart-quote";
@@ -47,15 +48,8 @@ import {
 export const runtime = "nodejs";
 
 const bodySchema = z.object({
-  items: z
-    .array(
-      z.object({
-        productSlug: z.string().min(1),
-        variantId: z.string().uuid().optional(),
-        quantity: z.number().int().positive(),
-      }),
-    )
-    .min(1, "Order must have at least one item"),
+  // An array, or a JSON string of one (Dailzero can't send arrays).
+  items: lineItemsInput,
   contact: z.object({
     name: z.string().min(1, "Recipient name is required"),
     phone: z.string().min(7, "Phone is required"),
@@ -83,7 +77,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const rawBody = await req.json();
+    // Flat fields (customerName, addressLine1, …) are what the Dailzero tool
+    // sends; nest them into contact/shipping.
+    const rawBody = nestOrderFields(await req.json());
     const parsed = bodySchema.safeParse(rawBody);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
