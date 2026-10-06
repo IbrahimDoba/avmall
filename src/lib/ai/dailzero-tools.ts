@@ -84,7 +84,7 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       description: [
         "Search the live Avmall catalogue. Matches product name, brand, category, description and common synonyms (e.g. 'power bank' finds 'portable charger'), and tolerates brand typos ('orimo' → Oraimo). In-stock items rank first.",
         "ALWAYS call this before saying whether we sell something — never answer from memory.",
-        "Returns found, count, inStockCount and products[] (name, brand, categoryName, description, price, regularPrice, status, inStock, stock, productUrl, slug). If found is false, we do NOT stock it: say so. If exactMatch is false, nothing matched everything they asked for: say we don't have exactly that. When the customer names a brand, the response lists requestedBrands and marks each product isRequestedBrand: only those are that brand — never describe another brand's product as the one they asked for. If a message field is present, follow it.",
+        "Returns found, count, inStockCount and products[] (name, brand, categoryName, description, price, regularPrice, status, inStock, stock, productUrl, slug). If found is false, we do NOT stock it: say so. If exactMatch is false, no product matches every word: notFound lists the words nothing mentions (e.g. 'bass', 'pepper') — say so honestly and never claim the products have them. Name each product's real brand; never describe one brand's product as another's. If a message field is present, follow it.",
         STOCK_NOTE,
         MONEY_NOTE,
         FACTS_NOTE,
@@ -215,6 +215,7 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       description: [
         "The AUTHORITATIVE total for a set of items: subtotal, bulk discount, coupon discount, delivery and total, using live prices and stock.",
         "ALWAYS call this before telling the customer a total; never add prices up yourself. Pass the matchedState from quote_shipping as state.",
+        "Only price what the customer actually chose. If they are still comparing options, ask which one first: never add alternatives together into one total.",
         "It prices items but does NOT check stock, so confirm inStock with search_products or get_product first. An error naming a product means that slug does not exist.",
         MONEY_NOTE,
       ].join(" "),
@@ -231,7 +232,7 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       method: "POST",
       url: `${api}/cart/prepare`,
       description:
-        "Build a link that opens the website with these items already in the customer's cart, so they can check out and pay themselves. The simplest way to close a sale: prefer it over create_order unless the customer wants you to place the order for them. Returns cartUrl: share it exactly as returned.",
+        "Build a link that opens the website with these items already in the customer's cart, so they can check out and pay themselves. The simplest way to close a sale: prefer it over create_order unless the customer wants you to place the order for them. Returns cartUrl: share it exactly as returned. Use it whenever they say 'add to cart', 'send me the link' or 'how do I buy/pay' for a product they've picked — with quantity 1 unless they said otherwise, instead of asking again.",
       parameters: [{ name: "items", type: "string", description: ITEMS_SHAPE, required: true }],
     },
     {

@@ -20,6 +20,8 @@ import {
 const BRANDS = [
   "ORAIMO", "Oraimo", "Power", "Shower", "Flower", "Banana", "Earbuds", "Ousimor", "Men", "Telexon", "Itel",
   "iPhone", "New Age", "Transparent", "Samsung", "Tecno", "Jamax", "Neepho", "Nivea", "Kenwood", "Airtel",
+  // Junk brands as imports leave them: the product name's first word.
+  "Face", "Ice", "Wireless", "Laptop", "Smart", "Gift", "Solar", "Iwin",
 ];
 
 const CATALOGUE = [
@@ -28,7 +30,8 @@ const CATALOGUE = [
   "Neepho Neepho L12 Face Tracking Tripod", "Table And 2 Chairs, MARBLE SURFACE", "Sokany 4 face cooking gas burner",
   "Kenwood Commercial Grinder Blender", "Wireless Controller for Ps4 P4-plus", "PS4 Camo Gamepad",
   "Men Gift Set With Powerbank", "ORAIMO Oraimo Conch Earpiece", "Itel Itel K9 Pro Earpiece", "Airtel Airtel Universal Mifi",
-  "Itel Itel 10,000mah 12w powerpulse Powerbank",
+  "Itel Itel 10,000mah 12w powerpulse Powerbank", "Face Face Brush", "Ice Ice Cream Bottle",
+  "Solar Solar Fan 16 inches With Panel and Bulb", "Iwin Iwin Rechargeable Fan Iw8038-S",
 ];
 
 const BRAND_CASES: [string, string[]][] = [
@@ -46,14 +49,16 @@ const BRAND_CASES: [string, string[]][] = [
 
 // [query, products that should be kept, partial?, catalogue override]
 const MATCH_CASES: [string, string[], boolean, string[]?][] = [
-  ["face cream", ["Neepho Neepho L12 Face Tracking Tripod", "Sokany 4 face cooking gas burner"], true],
   ["face cream", ["Nivea Nivea Face Cream Dark Spot"], false, [...CATALOGUE, "Nivea Nivea Face Cream Dark Spot"]],
-  // "iPhone" is in BRANDS, so only "charger" is required (the "13" is a bare
-  // number); both chargers qualify and ranking puts the iPhone one first.
-  // "Chager" is a typo in the real product name: the near-spelling still counts.
-  ["iphone 13 charger", ["ORAIMO Oraimo Cannon 18s Iphone Chager", "Original Laptop Charging Head Cable"], false],
+  // "13" is a bare number, so not required; "Chager" is a typo in the real
+  // product name and still counts as "charger".
+  ["iphone 13 charger", ["ORAIMO Oraimo Cannon 18s Iphone Chager"], false],
+  // The brand they named is required: Oraimo power banks only, while one exists.
+  ["oraimo power banks", ["ORAIMO Oraimo 20,000mAh 20w Powerbank"], false],
+  ["orimo power bank", ["ORAIMO Oraimo 20,000mAh 20w Powerbank"], false],
+  // "under 20k" is budget talk, not a product word.
   [
-    "oraimo power banks",
+    "power bank under 20k",
     [
       "ORAIMO Oraimo 20,000mAh 20w Powerbank",
       "Telexon Telexon PD 3 30,000mAh powerbank",
@@ -62,6 +67,11 @@ const MATCH_CASES: [string, string[], boolean, string[]?][] = [
     ],
     false,
   ],
+  // "Face" is a junk brand; it must still be required, or this is just "cream".
+  ["face cream", ["Neepho Neepho L12 Face Tracking Tripod", "Sokany 4 face cooking gas burner", "Face Face Brush", "Ice Ice Cream Bottle"], true],
+  // Thousands separators: "10,000mah" in the name, "10000mah" as typed.
+  ["itel 10000mah", ["Itel Itel 10,000mah 12w powerpulse Powerbank"], false],
+  ["rechargeable fan 16 inch", ["Solar Solar Fan 16 inches With Panel and Bulb"], false],
   ["do u sell blender", ["Kenwood Commercial Grinder Blender"], false],
   ["ps4 pad dey wireless", ["Wireless Controller for Ps4 P4-plus"], false],
   ["ps4 pad", ["Wireless Controller for Ps4 P4-plus", "PS4 Camo Gamepad"], false],

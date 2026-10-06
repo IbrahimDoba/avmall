@@ -10,14 +10,7 @@ import "server-only";
 
 import { cache } from "react";
 import { db, hasDatabase, withRetry } from "@/lib/db";
-import {
-  detectBrands,
-  expandSearchTerms,
-  hasWord,
-  normalizeText,
-  requiredWords,
-  wordCoverage,
-} from "@/lib/search-terms";
+import { planSearch, scoreProduct, selectHits, type SearchPlan } from "@/lib/search-terms";
 import { SEED_PRODUCT_IMAGE_BY_SLUG } from "@/lib/seed-product-images";
 import {
   type Product,
@@ -475,24 +468,15 @@ export async function searchProductsDetailed(
   requestedBrands: string[];
   /** Nothing matched every word asked for; `hits` only match some of it. */
   partial: boolean;
+  /** When partial: the words the hits don't mention ("bass"). */
+  missing: string[];
 }> {
-  const { tokens, terms, norm, tokenTerms } = expandSearchTerms(query);
-  if (terms.length === 0 || !hasDatabase) return { hits: [], requestedBrands: [], partial: false };
-
-  const { requested, brandTokens, mergedTerms, mergedTokens, typeTerms } = detectBrands(
-    { tokens, terms, norm },
-    await knownBrands(),
-  );
-  const brandNorms = new Set(requested.keys());
-  const coverTerms = requiredWords(tokens, tokenTerms, brandTokens);
-
-  const { hits, partial } = await queryProductHits(mergedTerms, mergedTokens, norm, limit, storeId, {
-    brands: brandNorms,
-    brandNames: [...requested.values()],
-    typeTerms,
-    coverTerms,
-  });
-  return { hits, requestedBrands: [...requested.values()], partial };
+  const none = { hits: [], requestedBrands: [], partial: false, missing: [] };
+  if (!hasDatabase) return none;
+  const plan = planSearch(query, await knownBrands());
+  if (!plan) return none;
+  const { hits, partial, missing } = await queryProductHits(plan, limit, storeId);
+  return { hits, requestedBrands: plan.brandNames, partial, missing };
 }
 
 /** Lightweight product shape for the admin category picker. A subset of
@@ -558,26 +542,14 @@ export async function browseProductsForCategory(
 /** Run the OR search over the given terms and rank the hits. Shared by the
  *  normal search and the fuzzy-corrected retry. */
 async function queryProductHits(
-  terms: string[],
-  tokens: string[],
-  norm: string,
+  plan: SearchPlan,
   limit: number,
   storeId?: string,
-  /** Brands the shopper named (normalised), and the rest of what they asked
-   *  for (terms, synonyms included) — e.g. "power bank" in "oraimo power bank". */
-  intent: {
-    brands: ReadonlySet<string>;
-    /** The same brands as stored, for the database lookup. */
-    brandNames: string[];
-    typeTerms: string[];
-    /** Per non-brand query word, what counts as matching it (wordCoverage). */
-    coverTerms: string[][];
-  } = { brands: new Set(), brandNames: [], typeTerms: [], coverTerms: [] },
-): Promise<{ hits: ProductSearchHit[]; partial: boolean }> {
+): Promise<{ hits: ProductSearchHit[]; partial: boolean; missing: string[] }> {
   // Broad candidate net: any expanded term in ANY searchable field — name,
   // brand, slug, both descriptions, the category, or an exact tag. This is what
   // lets "power bank" find a product that only says so in its details, not name.
-  const or: Prisma.ProductWhereInput[] = terms.flatMap((term) => [
+  const or: Prisma.ProductWhereInput[] = plan.terms.flatMap((term) => [
     { name: { contains: term, mode: "insensitive" } },
     { brand: { contains: term, mode: "insensitive" } },
     { slug: { contains: term, mode: "insensitive" } },
@@ -586,7 +558,7 @@ async function queryProductHits(
     { category: { name: { contains: term, mode: "insensitive" } } },
     { category: { slug: { contains: term, mode: "insensitive" } } },
   ]);
-  or.push({ tags: { hasSome: terms } });
+  or.push({ tags: { hasSome: plan.terms } });
 
   const include = {
     variants: {
@@ -624,19 +596,19 @@ async function queryProductHits(
   // The broad net is capped, so with a common word in the query ("power") the
   // named brand's own matches can fall outside it. Fetch those separately: that
   // brand's products that also match the rest of the query.
-  const typeOr: Prisma.ProductWhereInput[] = intent.typeTerms.flatMap((term) => [
+  const typeOr: Prisma.ProductWhereInput[] = plan.typeTerms.flatMap((term) => [
     { name: { contains: term, mode: "insensitive" } },
     { shortDesc: { contains: term, mode: "insensitive" } },
     { category: { name: { contains: term, mode: "insensitive" } } },
   ]);
-  if (intent.typeTerms.length) typeOr.push({ tags: { hasSome: intent.typeTerms } });
+  if (plan.typeTerms.length) typeOr.push({ tags: { hasSome: plan.typeTerms } });
   const [broad, branded] = await Promise.all([
     fetchPool({ OR: or }, Math.max(limit * 8, 50)),
-    intent.brandNames.length
+    plan.brandNames.length
       ? fetchPool(
           {
             AND: [
-              { OR: intent.brandNames.map((b) => ({ brand: { equals: b, mode: "insensitive" as const } })) },
+              { OR: plan.brandNames.map((b) => ({ brand: { equals: b, mode: "insensitive" as const } })) },
               ...(typeOr.length ? [{ OR: typeOr }] : []),
             ],
           },
@@ -647,72 +619,27 @@ async function queryProductHits(
   const seen = new Set<string>();
   const rows = [...branded, ...broad].filter((p) => !seen.has(p.id) && !!seen.add(p.id));
 
-  // Relevance: the shopper's own words weigh most, and a hit in the name beats
-  // one buried in the long description; synonyms count for less than real
-  // words. Matching is by whole word (hasWord): "face" must not score on
-  // "surface".
-  const scoreOf = (p: (typeof rows)[number]): { s: number; covered: number } => {
-    const name = normalizeText(`${p.name} ${p.brand}`);
-    const short = normalizeText(p.shortDesc);
-    const long = normalizeText(p.longDesc);
-    const cat = normalizeText(`${p.category.name} ${p.category.slug}`);
-    const tags = normalizeText(p.tags.join(" "));
-    const inName = (t: string) => hasWord(name, t);
-    let s = 0;
-    if (norm.length >= 3 && name.includes(norm)) s += 100; // whole phrase, in the name
-    for (const t of tokens) {
-      if (inName(t)) s += 10;
-      if (hasWord(tags, t)) s += 8;
-      if (hasWord(cat, t)) s += 6;
-      if (hasWord(short, t)) s += 4;
-      if (hasWord(long, t)) s += 2;
-    }
-    for (const term of terms) {
-      if (term === norm || tokens.includes(term)) continue; // real words already scored
-      if (inName(term)) s += 5;
-      else if (hasWord(cat, term)) s += 4;
-      else if (hasWord(tags, term)) s += 4;
-      else if (hasWord(short, term)) s += 3;
-      else if (hasWord(long, term)) s += 1;
-    }
-    // How much of what they asked for this product is, brand aside.
-    const covered = wordCoverage(`${name} ${tags} ${cat} ${short} ${long}`, intent.coverTerms);
-    // The brand they asked for outweighs everything below, stock included: an
-    // out-of-stock Oraimo is the honest answer to "oraimo power bank", and the
-    // in-stock boost would otherwise hand that slot to another brand.
-    // ...but only for products that are also what they asked for: for "oraimo
-    // power bank" an Oraimo power bank, not an Oraimo cable.
-    if (intent.brands.has(normalizeText(p.brand))) {
-      const isWhatTheyWant = intent.coverTerms.length === 0 || covered > 0;
-      if (isWhatTheyWant) s += 30;
-    }
-    // Lead with what's actually in stock — a moderate boost, so a strong exact
-    // match that happens to be out of stock still shows, just lower.
-    const stk = p.variants.reduce((a, v) => a + v.storeStock.reduce((b, ss) => b + ss.onHand, 0), 0);
-    if (stk > 0) s += 8;
-    if (p.featured) s += 3;
-    return { s, covered };
-  };
-
   const scored = rows
     // Store-scoped search hides products not stocked at that store.
     .filter((p) => (storeId ? p.variants.some((v) => v.storeStock.length > 0) : true))
-    .map((p) => ({ p, ...scoreOf(p) }))
-    .filter((x) => x.s > 0);
+    .map((p) => ({
+      p,
+      featured: p.featured,
+      ...scoreProduct(plan, {
+        name: p.name,
+        brand: p.brand,
+        shortDesc: p.shortDesc,
+        longDesc: p.longDesc,
+        categoryName: p.category.name,
+        categorySlug: p.category.slug,
+        tags: p.tags,
+        inStock: p.variants.some((v) => v.storeStock.some((ss) => ss.onHand > 0)),
+        featured: p.featured,
+      }),
+    }));
+  const { kept, partial, missing } = selectHits(plan, scored, limit);
 
-  // Keep only the products that match the most of what was asked. With "face
-  // cream", anything that's only a "face" something drops out as soon as one
-  // real cream exists; if none does, `partial` says so and the caller tells the
-  // shopper instead of passing the leftovers off as a match.
-  const want = intent.coverTerms.length;
-  const best = scored.reduce((m, x) => Math.max(m, x.covered), 0);
-  const kept = want > 0 ? scored.filter((x) => x.covered === best) : scored;
-  const partial = want > 0 && best < want;
-
-  const hits = kept
-    .sort((a, b) => b.s - a.s || Number(b.p.featured) - Number(a.p.featured))
-    .slice(0, limit)
-    .map(({ p }) => {
+  const hits = kept.map(({ p }) => {
       const r2Url = p.images[0] ? publicUrlForKey(p.images[0].key) : null;
       return {
         id: p.id,
@@ -738,7 +665,7 @@ async function queryProductHits(
         })),
       };
     });
-  return { hits, partial };
+  return { hits, partial, missing };
 }
 
 /**

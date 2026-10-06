@@ -52,10 +52,17 @@ const SEARCH_STOPWORDS = new Set([
   "product", "products", "item", "items", "available", "stock",
   // Chat phrasing ("how much be that…", "u get am?") that names no product.
   "how", "much", "price", "cost", "u", "ur", "una", "dey", "wey", "hi", "hello", "kindly", "plz", "sir", "ma",
+  // Budget phrasing ("under 20k") — the agent filters by price itself.
+  "under", "below", "above", "over", "less", "than", "budget", "around", "about", "within", "range", "naira",
 ]);
 
 export function normalizeText(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  return s
+    .toLowerCase()
+    .replace(/(\d),(?=\d{3}(?!\d))/g, "$1") // "10,000mah" reads as "10000mah", as people type it
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -158,26 +165,37 @@ function hasNearWord(text: string, term: string): boolean {
  * spelling. Search keeps only the products that cover the most, so "face
  * cream" never answers with something that's only a "face" anything.
  */
-/** Words a product must match to count as "what they asked for". Bare numbers
- *  ("13" in "iphone 13 charger") help ranking but aren't required: a model
- *  number shouldn't hide the right charger. Brand words are handled apart. */
+/**
+ * Words a product must match to count as "what they asked for". Bare numbers
+ * and amounts ("13" in "iphone 13 charger", "20k") help ranking but aren't
+ * required: a model number shouldn't hide the right charger.
+ *
+ * Brand words stay required, matched by the word or the brand it named
+ * ("orimo" → oraimo). Imports set many brands to a product's first word
+ * ("Face", "Wireless", "Laptop"), so dropping brand words made "face cream"
+ * mean just "cream" — and return an ice-cream bottle.
+ */
 export function requiredWords(
   tokens: string[],
   tokenTerms: string[][],
-  brandTokens: ReadonlySet<string>,
+  brandTokens: ReadonlyMap<string, string[]>,
 ): string[][] {
-  return tokenTerms.filter((_, i) => {
+  return tokenTerms.flatMap((alts, i) => {
     const t = tokens[i];
-    return t !== undefined && !brandTokens.has(t) && !/^\d+$/.test(t);
+    if (t === undefined || /^\d+[km]?$/.test(t)) return [];
+    return [[...alts, ...(brandTokens.get(t) ?? [])]];
   });
 }
 
 export function wordCoverage(text: string, tokenTerms: string[][]): number {
-  let covered = 0;
-  for (const alts of tokenTerms) {
-    if (alts.some((t) => hasWord(text, t)) || hasNearWord(text, alts[0]!)) covered++;
-  }
-  return covered;
+  return tokenTerms.length - missingWords(text, tokenTerms).length;
+}
+
+/** The required words `text` doesn't cover, as the shopper typed them. */
+export function missingWords(text: string, tokenTerms: string[][]): string[] {
+  return tokenTerms
+    .filter((alts) => !(alts.some((t) => hasWord(text, t)) || hasNearWord(text, alts[0]!)))
+    .map((alts) => alts[0]!);
 }
 
 function bigrams(s: string): Set<string> {
@@ -207,8 +225,9 @@ export function detectBrands(
   brands: readonly string[],
 ): {
   requested: Map<string, string>;
-  /** Query words that named a brand (so coverage can leave them out). */
-  brandTokens: Set<string>;
+  /** Query words that named a brand → the brand(s) they named (normalised),
+   *  e.g. "orimo" → ["oraimo"]. */
+  brandTokens: Map<string, string[]>;
   mergedTerms: string[];
   mergedTokens: string[];
   typeTerms: string[];
@@ -230,7 +249,8 @@ export function detectBrands(
     diceSim(t, bn) >= 0.65;
   const brandable = tokens.filter((t) => !PRODUCT_WORDS.has(t) && !PRODUCT_WORDS.has(singular(t)));
   const requested = new Map<string, string>(); // normalised → as stored
-  const brandTokens = new Set<string>();
+  const brandTokens = new Map<string, string[]>();
+  const noteBrand = (t: string, bn: string) => brandTokens.set(t, [...(brandTokens.get(t) ?? []), bn]);
   for (const b of brands) {
     const bn = normalizeText(b);
     if (bn.length < 3 || PRODUCT_WORDS.has(bn) || PRODUCT_WORDS.has(singular(bn))) continue;
@@ -238,8 +258,8 @@ export function detectBrands(
     const phrase = bn.includes(" ") && norm.includes(bn);
     if (!hit.length && !phrase) continue;
     if (!requested.has(bn)) requested.set(bn, b);
-    for (const t of hit) brandTokens.add(t);
-    if (phrase) for (const w of bn.split(" ")) brandTokens.add(w);
+    for (const t of hit) noteBrand(t, bn);
+    if (phrase) for (const w of bn.split(" ")) noteBrand(w, bn);
   }
   const brandNorms = new Set(requested.keys());
 
@@ -254,4 +274,128 @@ export function detectBrands(
   );
 
   return { requested, brandTokens, mergedTerms, mergedTokens, typeTerms };
+}
+
+// ── Planning and scoring a search ────────────────────────────────────────────
+// Everything about ranking that doesn't need the database lives here, so the
+// live search (lib/data/products) and the offline checks run the same code.
+
+export interface SearchPlan {
+  /** The query, normalised. */
+  norm: string;
+  /** The shopper's words (stopwords dropped), plus corrected brand spellings. */
+  tokens: string[];
+  /** Everything worth matching: words, synonyms, corrected brands. */
+  terms: string[];
+  /** Brands the query named — normalised, and as stored. */
+  brandNorms: Set<string>;
+  brandNames: string[];
+  /** Non-brand terms ("power bank" in "oraimo power bank"). */
+  typeTerms: string[];
+  /** Per required word, what counts as matching it (wordCoverage). */
+  coverTerms: string[][];
+}
+
+export function planSearch(query: string, knownBrands: readonly string[]): SearchPlan | null {
+  const { tokens, terms, norm, tokenTerms } = expandSearchTerms(query);
+  if (terms.length === 0) return null;
+  const { requested, brandTokens, mergedTerms, mergedTokens, typeTerms } = detectBrands(
+    { tokens, terms, norm },
+    knownBrands,
+  );
+  return {
+    norm,
+    tokens: mergedTokens,
+    terms: mergedTerms,
+    brandNorms: new Set(requested.keys()),
+    brandNames: [...requested.values()],
+    typeTerms,
+    coverTerms: requiredWords(tokens, tokenTerms, brandTokens),
+  };
+}
+
+export interface ScorableProduct {
+  name: string;
+  brand: string;
+  shortDesc: string;
+  longDesc: string;
+  categoryName: string;
+  categorySlug: string;
+  tags: string[];
+  inStock: boolean;
+  featured: boolean;
+}
+
+/**
+ * Relevance of one product. The shopper's own words weigh most, a hit in the
+ * name beats one buried in the long description, synonyms count for less than
+ * real words — all by whole word, so "face" never scores on "surface".
+ * `covered` is how many of the required words it matches.
+ */
+export function scoreProduct(
+  plan: SearchPlan,
+  p: ScorableProduct,
+): { s: number; covered: number; missing: string[] } {
+  const name = normalizeText(`${p.name} ${p.brand}`);
+  const short = normalizeText(p.shortDesc);
+  const long = normalizeText(p.longDesc);
+  const cat = normalizeText(`${p.categoryName} ${p.categorySlug}`);
+  const tags = normalizeText(p.tags.join(" "));
+  const { norm, tokens, terms } = plan;
+  let s = 0;
+  if (norm.length >= 3 && name.includes(norm)) s += 100; // whole phrase, in the name
+  for (const t of tokens) {
+    if (hasWord(name, t)) s += 10;
+    if (hasWord(tags, t)) s += 8;
+    if (hasWord(cat, t)) s += 6;
+    if (hasWord(short, t)) s += 4;
+    if (hasWord(long, t)) s += 2;
+  }
+  for (const term of terms) {
+    if (term === norm || tokens.includes(term)) continue; // real words already scored
+    if (hasWord(name, term)) s += 5;
+    else if (hasWord(cat, term)) s += 4;
+    else if (hasWord(tags, term)) s += 4;
+    else if (hasWord(short, term)) s += 3;
+    else if (hasWord(long, term)) s += 1;
+  }
+  const missing = missingWords(`${name} ${tags} ${cat} ${short} ${long}`, plan.coverTerms);
+  const covered = plan.coverTerms.length - missing.length;
+  // The brand they asked for outweighs everything below, stock included: an
+  // out-of-stock Oraimo is the honest answer to "oraimo power bank", and the
+  // in-stock boost would otherwise hand that slot to another brand. Only for
+  // products that are also what they asked for — not an Oraimo cable.
+  if (plan.brandNorms.has(normalizeText(p.brand)) && (plan.coverTerms.length === 0 || covered > 0)) {
+    s += 30;
+  }
+  // Lead with what's in stock — a moderate boost, so a strong exact match that
+  // happens to be out of stock still shows, just lower.
+  if (p.inStock) s += 8;
+  if (p.featured) s += 3;
+  return { s, covered, missing };
+}
+
+/**
+ * Pick the results: only the products covering the most of what was asked
+ * (with "face cream", anything that's only a "face" something drops out as
+ * soon as one real cream exists), best first. `partial` = none covered it all.
+ */
+export function selectHits<T extends { s: number; covered: number; missing: string[]; featured: boolean }>(
+  plan: SearchPlan,
+  scored: T[],
+  limit: number,
+): {
+  kept: T[];
+  partial: boolean;
+  /** When partial: the asked-for words the best results don't mention. */
+  missing: string[];
+} {
+  const relevant = scored.filter((x) => x.s > 0);
+  const want = plan.coverTerms.length;
+  const best = relevant.reduce((m, x) => Math.max(m, x.covered), 0);
+  const kept = (want > 0 ? relevant.filter((x) => x.covered === best) : relevant)
+    .sort((a, b) => b.s - a.s || Number(b.featured) - Number(a.featured))
+    .slice(0, limit);
+  const partial = want > 0 && best < want;
+  return { kept, partial, missing: partial ? (kept[0]?.missing ?? []) : [] };
 }
