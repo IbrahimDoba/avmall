@@ -29,6 +29,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { lineItemsInput } from "@/lib/ai/tool-input";
 import { db, hasDatabase } from "@/lib/db";
 import { requireAiAgent } from "@/lib/ai-auth";
 import { getMainStoreId } from "@/lib/store";
@@ -42,15 +43,8 @@ import type { CartLine, CartLineSnapshot } from "@/stores/cart-store";
 export const runtime = "nodejs";
 
 const bodySchema = z.object({
-  items: z
-    .array(
-      z.object({
-        productSlug: z.string().min(1),
-        variantId: z.string().uuid().optional(),
-        quantity: z.number().int().positive(),
-      }),
-    )
-    .min(1, "At least one item required"),
+  // An array, or a JSON string of one (Dailzero can't send arrays).
+  items: lineItemsInput,
 });
 
 export async function POST(req: NextRequest) {

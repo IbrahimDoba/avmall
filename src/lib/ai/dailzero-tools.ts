@@ -19,13 +19,10 @@
  * tsx. It holds no secrets; the token is passed in.
  */
 
-export type DailzeroParamType =
-  | "string"
-  | "integer"
-  | "number"
-  | "boolean"
-  | "array"
-  | "object";
+/** All Dailzero accepts — no arrays or objects. Line items therefore go as a
+ *  JSON string and an order's contact/address as flat fields (see
+ *  lib/ai/tool-input, which the endpoints parse them with). */
+export type DailzeroParamType = "string" | "integer" | "number" | "boolean";
 
 export interface DailzeroToolParam {
   name: string;
@@ -60,7 +57,7 @@ const STOCK_NOTE =
   "Only call a product available when inStock is true. Out of stock is out of stock, even if the product is listed.";
 
 const ITEMS_SHAPE =
-  'JSON array of line items, each {"productSlug": "<slug exactly as a product tool returned it>", "quantity": <whole number ≥ 1>, "variantId": "<only for products with variants: the variants[].id from get_product>"}. Example: [{"productSlug":"oraimo-20000mah-power-bank","quantity":2}]';
+  'The items as a JSON array written as text, each {"productSlug": "<slug exactly as a product tool returned it>", "quantity": <whole number ≥ 1>, "variantId": "<only for products with variants: the variants[].id from get_product>"}. Example: [{"productSlug":"oraimo-20000mah-power-bank","quantity":2}]';
 
 // ── The tools ────────────────────────────────────────────────────────────────
 
@@ -203,7 +200,7 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
         MONEY_NOTE,
       ].join(" "),
       parameters: [
-        { name: "items", type: "array", description: ITEMS_SHAPE, required: true },
+        { name: "items", type: "string", description: ITEMS_SHAPE, required: true },
         { name: "state", type: "string", description: "Delivery state (the matchedState from quote_shipping)." },
         { name: "lga", type: "string", description: "Delivery LGA/area, when the customer gave one." },
         { name: "couponCode", type: "string", description: "Coupon code, only if the customer gave one." },
@@ -216,7 +213,7 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
       url: `${api}/cart/prepare`,
       description:
         "Build a link that opens the website with these items already in the customer's cart, so they can check out and pay themselves. The simplest way to close a sale: prefer it over create_order unless the customer wants you to place the order for them. Returns cartUrl: share it exactly as returned.",
-      parameters: [{ name: "items", type: "array", description: ITEMS_SHAPE, required: true }],
+      parameters: [{ name: "items", type: "string", description: ITEMS_SHAPE, required: true }],
     },
     {
       name: "negotiate_price",
@@ -251,19 +248,22 @@ export function buildAvmallTools(baseUrl: string, token: string): DailzeroTool[]
         MONEY_NOTE,
       ].join(" "),
       parameters: [
-        { name: "items", type: "array", description: ITEMS_SHAPE, required: true },
+        { name: "items", type: "string", description: ITEMS_SHAPE, required: true },
+        { name: "customerName", type: "string", description: "Buyer's full name.", required: true },
         {
-          name: "contact",
-          type: "object",
-          description:
-            'Buyer contact as {"name": "<full name>", "phone": "<Nigerian phone, any format>", "email": "<optional>"}.',
+          name: "customerPhone",
+          type: "string",
+          description: "Buyer's Nigerian phone number, any format (0803…, +234803…).",
           required: true,
         },
+        { name: "customerEmail", type: "string", description: "Buyer's email, only if they gave one." },
+        { name: "addressLine1", type: "string", description: "Street address for delivery.", required: true },
+        { name: "addressLine2", type: "string", description: "Landmark or extra directions, if given." },
+        { name: "city", type: "string", description: "LGA or area, e.g. 'Ikeja', 'Kawo'.", required: true },
         {
-          name: "shipping",
-          type: "object",
-          description:
-            'Delivery address as {"line1": "<street address>", "line2": "<optional landmark>", "city": "<LGA or area>", "state": "<the matchedState from quote_shipping>"}.',
+          name: "state",
+          type: "string",
+          description: "Delivery state: the matchedState from quote_shipping.",
           required: true,
         },
         { name: "couponCode", type: "string", description: "Coupon code, only if the customer gave one." },
