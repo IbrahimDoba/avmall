@@ -15,8 +15,8 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { db, hasDatabase } from "@/lib/db";
-import { findZoneForState, findZoneForArea, canonicalStateName } from "@/lib/shipping-zone";
+import { hasDatabase } from "@/lib/db";
+import { canonicalStateName, resolveShipping } from "@/lib/shipping-zone";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
 import { formatMoney } from "@/lib/money";
 import { nairaParamToKobo } from "@/lib/ai/naira-input";
@@ -43,68 +43,55 @@ export async function GET(req: NextRequest) {
     // Optional LGA/area — when given, an area-specific price beats the state one.
     const requestedLga = req.nextUrl.searchParams.get("lga")?.trim();
 
-    const matchedState = canonicalStateName(requestedState);
-    const areaZone = requestedLga ? await findZoneForArea(requestedState, requestedLga) : null;
-    const zone = areaZone ?? (await findZoneForState(requestedState));
+    const matchedState = canonicalStateName(requestedState) ?? requestedState;
+    // The same resolver the cart and checkout charge by, so the agent can
+    // never quote a fee the customer won't actually pay. (This route used to
+    // read zones itself and quoted ₦0 zones as free, while checkout treats a
+    // ₦0 rate as unset and charges the fallback.)
+    const r = await resolveShipping({
+      state: requestedState,
+      lga: requestedLga,
+      netSubtotalKobo: subtotalKobo,
+    });
+
+    if (r.source === "none") {
+      return NextResponse.json(
+        apiSuccess({
+          requestedState,
+          matchedState,
+          zone: null,
+          etaDays: null,
+          shipping: null,
+          qualifiesForFreeShipping: false,
+          unavailable: true,
+          message:
+            "We don't have a delivery price for this location. Don't guess one: give the customer the WhatsApp link from get_store_info for a custom quote.",
+        }),
+      );
+    }
+
     // They named an area we have no separate price for: this is the state's
-    // general rate, and the agent must not present it as that area's price.
+    // general rate (or the fallback), not a price for that area.
     const areaNote =
-      requestedLga && !areaZone
+      requestedLga && r.source !== "area"
         ? {
             areaMatched: false,
-            areaMessage: `We don't have a specific delivery price for "${requestedLga}", so this is the general ${matchedState ?? requestedState} rate. Say it's the usual rate for ${matchedState ?? requestedState}, and that the shop will confirm the exact fee for ${requestedLga} if it differs.`,
+            areaMessage: `We don't have a specific delivery price for "${requestedLga}", so this is the general ${r.source === "fallback" ? "standard" : matchedState} rate. Say so, and that the shop will confirm the exact fee for ${requestedLga} if it differs.`,
           }
         : requestedLga
           ? { areaMatched: true }
           : {};
 
-    if (zone) {
-      const freeOver = zone.freeOverKobo == null ? null : Number(zone.freeOverKobo);
-      const qualifiesFree = freeOver != null && subtotalKobo >= freeOver;
-      return NextResponse.json(
-        apiSuccess({
-          requestedState,
-          matchedState: matchedState ?? requestedState,
-          zone: zone.name,
-          etaDays: zone.etaDays,
-          shipping: qualifiesFree ? "Free" : formatMoney(Number(zone.baseRateKobo)),
-          freeOver: freeOver != null ? formatMoney(freeOver) : null,
-          qualifiesForFreeShipping: qualifiesFree,
-          fallback: false,
-          ...areaNote,
-        }),
-      );
-    }
-
-    const fb = await db.fallbackShipping.findFirst();
-    if (fb?.enabled) {
-      return NextResponse.json(
-        apiSuccess({
-          requestedState,
-          matchedState: matchedState ?? requestedState,
-          zone: "Fallback",
-          etaDays: fb.etaDays,
-          shipping: formatMoney(Number(fb.flatRateKobo)),
-          freeOver: null,
-          qualifiesForFreeShipping: false,
-          fallback: true,
-          ...areaNote,
-        }),
-      );
-    }
-
-    // No zone, no fallback enabled — explicit "we don't ship there" answer.
     return NextResponse.json(
       apiSuccess({
         requestedState,
         matchedState,
-        zone: null,
-        etaDays: null,
-        shipping: null,
-        qualifiesForFreeShipping: false,
-        unavailable: true,
-        message:
-          "No active shipping zone covers this state. Recommend the customer contact us on WhatsApp for a custom quote.",
+        zone: r.zone?.name ?? null,
+        etaDays: r.zone?.etaDays ?? null,
+        shipping: r.freeShippingEligible ? "Free" : formatMoney(r.shippingKobo),
+        qualifiesForFreeShipping: r.freeShippingEligible,
+        fallback: r.source === "fallback",
+        ...areaNote,
       }),
     );
   } catch (err) {

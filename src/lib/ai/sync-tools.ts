@@ -44,11 +44,13 @@ export function diffTool(cur: DailzeroStoredTool, next: DailzeroTool): string[] 
   for (const k of ["url", "method", "displayName", "description"] as const) {
     if ((cur[k] ?? "") !== next[k]) out.push(k);
   }
+  // Fixed key order: Dailzero stores each param with its own key order
+  // ({name, type, required, description}), which isn't a difference.
   const canon = (ps: DailzeroTool["parameters"] = []) =>
     JSON.stringify(
       [...ps]
-        .map((p) => ({ ...p, required: !!p.required }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
+        .map((p) => [p.name, p.type, p.description, !!p.required, p.enum ?? null])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
     );
   if (canon(cur.parameters) !== canon(next.parameters)) {
     const curNames = new Set((cur.parameters ?? []).map((p) => p.name));

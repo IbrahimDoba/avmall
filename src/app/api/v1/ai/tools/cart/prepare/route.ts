@@ -30,15 +30,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { lineItemsInput } from "@/lib/ai/tool-input";
-import { db, hasDatabase } from "@/lib/db";
+import { hasDatabase } from "@/lib/db";
 import { requireAiAgent } from "@/lib/ai-auth";
-import { getMainStoreId } from "@/lib/store";
 import { apiSuccess, handleApiError } from "@/lib/api-response";
-import { env } from "@/lib/env";
-import { SITE } from "@/lib/site";
 import { formatMoney } from "@/lib/money";
-import { AppError, NotFoundError, ValidationError } from "@/lib/errors";
-import type { CartLine, CartLineSnapshot } from "@/stores/cart-store";
+import { AppError, ValidationError } from "@/lib/errors";
+import { buildCartLines, cartLinkFor } from "@/lib/cart-lines";
 
 export const runtime = "nodejs";
 
@@ -68,112 +65,20 @@ export async function POST(req: NextRequest) {
     }
     const { items } = parsed.data;
 
-    // AI surfaces the Main store's availability (the storefront default).
-    const storeId = await getMainStoreId();
-
-    const slugs = Array.from(new Set(items.map((i) => i.productSlug)));
-    const products = await db.product.findMany({
-      where: { slug: { in: slugs }, archivedAt: null, published: true },
-      include: {
-        variants: {
-          orderBy: { position: "asc" },
-          include: { storeStock: storeId ? { where: { storeId } } : true },
-        },
-        bulkTiers: true,
-        images: { orderBy: [{ isPrimary: "desc" }, { position: "asc" }] },
-      },
-    });
-    const productBySlug = new Map(products.map((p) => [p.slug, p]));
-
-    // Match the same R2 → fallback chain that the storefront uses.
-    const r2Base = process.env.R2_PUBLIC_URL?.trim().replace(/\/+$/, "") ?? null;
-    function imageUrlFor(p: (typeof products)[number]): string {
-      if (r2Base && p.images[0]) return `${r2Base}/${p.images[0].key}`;
-      return `https://picsum.photos/seed/${encodeURIComponent(p.slug)}/800/800`;
-    }
-
-    const cartLines: CartLine[] = [];
-    let subtotalKobo = 0;
-    let itemCount = 0;
-    const summaryLines: Array<{
-      slug: string;
-      name: string;
-      quantity: number;
-      unit: string;
-    }> = [];
-
-    for (const item of items) {
-      const product = productBySlug.get(item.productSlug);
-      if (!product) throw new NotFoundError(`Product ${item.productSlug}`);
-
-      const variant = item.variantId
-        ? product.variants.find((v) => v.id === item.variantId)
-        : (product.variants.find((v) => {
-            const s = v.storeStock[0];
-            return s && s.onHand - s.reserved > 0;
-          }) ?? product.variants[0]);
-      if (!variant) throw new NotFoundError(`Variant for ${item.productSlug}`);
-
-      const vs = variant.storeStock[0];
-      const available = vs ? vs.onHand - vs.reserved : 0;
-      if (available < item.quantity && !product.preorder) {
-        throw new AppError(
-          "STOCK_UNAVAILABLE",
-          `Only ${available} of ${product.name} available (requested ${item.quantity})`,
-          409,
-        );
-      }
-
-      const unitKobo = Number(
-        variant.priceKobo ??
-          (product.saleActive && product.saleKobo != null
-            ? product.saleKobo
-            : product.priceKobo),
-      );
-
-      const snapshot: CartLineSnapshot = {
-        slug: product.slug,
-        name: product.name,
-        brand: product.brand,
-        imageUrl: imageUrlFor(product),
-        bg: product.themeBg ?? "linear-gradient(135deg, #ece4d4 0%, #c4a87a 100%)",
-        variantLabel: variant.label,
-        unitKobo,
-        stock: available,
-        bulk: product.bulkTiers.map((t) => ({
-          min: t.min,
-          max: t.max,
-          type: t.type,
-          value: t.value,
-        })),
-      };
-
-      cartLines.push({
-        productId: product.id,
-        variantId: variant.id,
-        qty: item.quantity,
-        snapshot,
-      });
-      subtotalKobo += unitKobo * item.quantity;
-      itemCount += item.quantity;
-      summaryLines.push({
-        slug: product.slug,
-        name: product.name,
-        quantity: item.quantity,
-        unit: formatMoney(unitKobo),
-      });
-    }
-
-    // Encode cart contents for the deeplink. base64url so it's URL-safe.
-    const payload = JSON.stringify(cartLines);
-    const b64 = Buffer.from(payload, "utf8")
-      .toString("base64")
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/, "");
-
-    const appBaseUrl = env.NEXT_PUBLIC_APP_URL ?? SITE.url;
-    const cartUrl = `${appBaseUrl}/cart?cart=${b64}`;
+    const built = await buildCartLines(items);
+    const subtotalKobo = built.reduce((a, b) => a + b.unitKobo * b.line.qty, 0);
+    const itemCount = built.reduce((a, b) => a + b.line.qty, 0);
+    const summaryLines = built.map((b) => ({
+      slug: b.line.snapshot!.slug,
+      name: b.name,
+      quantity: b.line.qty,
+      unit: formatMoney(b.unitKobo),
+    }));
+    // Short and readable (/cart?add=slug:qty) so the agent pastes it as is;
+    // the cart page re-reads the products live when it opens.
+    const cartUrl = cartLinkFor(
+      built.map((b) => ({ productSlug: b.line.snapshot!.slug, quantity: b.line.qty, variantId: b.line.variantId })),
+    );
 
     return NextResponse.json(
       apiSuccess({

@@ -43,6 +43,18 @@ export async function GET() {
         zones: zones.map((z) => {
           const rate = Number(z.baseRateKobo);
           const freeOver = z.freeOverKobo == null ? null : Number(z.freeOverKobo);
+          // Checkout treats a ₦0 rate as "not set" and charges the fallback
+          // instead (lib/shipping-zone resolveShipping) — say that, rather
+          // than letting the agent promise free delivery checkout won't give.
+          if (rate <= 0) {
+            return {
+              name: z.name,
+              states: z.states,
+              rate: null,
+              note: "No delivery price set for this zone; the standard (fallback) rate applies.",
+              etaDays: z.etaDays,
+            };
+          }
           return {
             name: z.name,
             states: z.states,

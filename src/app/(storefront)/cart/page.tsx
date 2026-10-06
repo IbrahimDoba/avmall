@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { CouponInput } from "@/components/ui/coupon-input";
 import { useCart, resolveCart, computeTotals, type CartLine } from "@/stores/cart-store";
 import { cn } from "@/lib/utils";
+import { toast } from "@/components/ui/toaster";
 
 /**
  * Decode the AI deeplink payload (?cart=<base64url JSON>). Returns null on
@@ -64,16 +65,37 @@ export default function CartPage() {
   const remove = useCart((s) => s.remove);
   const addLines = useCart((s) => s.addLines);
 
-  // AI deeplink: ?cart=<base64url JSON of CartLine[]>. Merge into the existing
-  // cart on first paint, then strip the param so a refresh doesn't re-add.
+  // AI deeplinks, merged into the existing cart on first paint; the param is
+  // then stripped so a refresh doesn't re-add.
+  //  - ?add=slug:qty,…  (current) — resolved live by /api/v1/cart/lines
+  //  - ?cart=<base64url JSON of CartLine[]>  (older links still in chats)
   React.useEffect(() => {
     const url = new URL(window.location.href);
-    const param = url.searchParams.get("cart");
-    if (!param) return;
-    const incoming = decodeCartParam(param);
-    if (incoming) addLines(incoming);
+    const legacy = url.searchParams.get("cart");
+    const add = url.searchParams.get("add");
+    if (!legacy && !add) return;
     url.searchParams.delete("cart");
+    url.searchParams.delete("add");
     window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+
+    if (legacy) {
+      const incoming = decodeCartParam(legacy);
+      if (incoming) addLines(incoming);
+    }
+    if (add) {
+      void fetch("/api/v1/cart/lines", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ add }),
+      })
+        .then((r) => r.json())
+        .then((json: { data?: { lines: CartLine[]; skipped: { slug: string; reason: string }[] } }) => {
+          if (!json.data) throw new Error();
+          if (json.data.lines.length) addLines(json.data.lines);
+          for (const s of json.data.skipped) toast.error(`Couldn't add an item: ${s.reason}`);
+        })
+        .catch(() => toast.error("Couldn't load the items from that link. Please try again."));
+    }
   }, [addLines]);
 
   const resolved = React.useMemo(() => resolveCart(lines), [lines]);
