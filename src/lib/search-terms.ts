@@ -18,7 +18,7 @@ const SEARCH_SYNONYMS: readonly (readonly string[])[] = [
   ["power bank", "powerbank", "portable charger", "battery pack", "backup battery", "power"],
   ["charger", "adapter", "adaptor", "charging", "fast charger", "wall charger"],
   ["cable", "cord", "usb cable", "charging cable", "type c", "lightning cable"],
-  ["earphone", "earbud", "earbuds", "earpiece", "headphone", "headphones", "headset", "airpod", "airpods", "handsfree", "audio"],
+  ["earphone", "earbud", "earbuds", "earpiece", "headphone", "headphones", "headset", "airpod", "airpods", "handsfree"],
   ["speaker", "bluetooth speaker", "sound", "soundbar", "boombox"],
   ["fan", "rechargeable fan", "standing fan", "table fan", "cooling fan", "cooler"],
   ["phone", "smartphone", "android", "mobile", "handset"],
@@ -56,6 +56,9 @@ const SEARCH_STOPWORDS = new Set([
   "under", "below", "above", "over", "less", "than", "budget", "around", "about", "within", "range", "naira",
 ]);
 
+/** Connectors after which the rest of a query is context ("for laptop"). */
+const CONTEXT_WORDS = new Set(["for", "and", "with", "plus"]);
+
 export function normalizeText(s: string): string {
   return s
     .toLowerCase()
@@ -83,9 +86,18 @@ export function expandSearchTerms(query: string): {
    *  and the synonym group(s) it triggered. Drives "did the product match
    *  everything they asked for" (see wordCoverage). */
   tokenTerms: string[][];
+  /** Per token: true when it comes after "for" / "and" / "with" (context). */
+  context: boolean[];
 } {
   const norm = normalizeText(query);
   const tokens = norm.split(" ").filter((t) => t.length >= 2 && !SEARCH_STOPWORDS.has(t));
+  // Words after the first "for" / "and" / "with" are context, not the product:
+  // "wireless mouse for laptop" wants a mouse, "charger and cable" a charger
+  // first. They still help ranking; they just aren't required (requiredWords).
+  const words = norm.split(" ");
+  const cut = words.findIndex((w, i) => i > 0 && CONTEXT_WORDS.has(w));
+  const head = new Set(cut === -1 ? words : words.slice(0, cut));
+  const context = tokens.map((t) => !head.has(t));
   const terms = new Set<string>();
   if (norm) terms.add(norm);
   const tokenTerms = tokens.map((t) => [...new Set([t, singular(t)])]);
@@ -130,6 +142,7 @@ export function expandSearchTerms(query: string): {
     norm,
     // Index-aligned with `tokens` (callers filter both together).
     tokenTerms: tokens.length ? tokenTerms : norm ? [[norm]] : [],
+    context: tokens.length ? context : norm ? [false] : [],
   };
 }
 
@@ -179,10 +192,11 @@ export function requiredWords(
   tokens: string[],
   tokenTerms: string[][],
   brandTokens: ReadonlyMap<string, string[]>,
+  context: readonly boolean[] = [],
 ): string[][] {
   return tokenTerms.flatMap((alts, i) => {
     const t = tokens[i];
-    if (t === undefined || /^\d+[km]?$/.test(t)) return [];
+    if (t === undefined || context[i] || /^\d+[km]?$/.test(t)) return [];
     return [[...alts, ...(brandTokens.get(t) ?? [])]];
   });
 }
@@ -191,10 +205,26 @@ export function wordCoverage(text: string, tokenTerms: string[][]): number {
   return tokenTerms.length - missingWords(text, tokenTerms).length;
 }
 
+/**
+ * Phrases where a product word means something else: an "Ice Cream Bottle" is
+ * not a cream. Matching a word ignores these phrases.
+ */
+const FALSE_FRIENDS: Record<string, readonly string[]> = {
+  cream: ["ice cream"],
+  fan: ["fan club"],
+  pad: ["mouse pad", "mousepad", "note pad", "notepad", "hot pad"],
+  watch: ["watch strap", "watch band"],
+};
+
 /** The required words `text` doesn't cover, as the shopper typed them. */
 export function missingWords(text: string, tokenTerms: string[][]): string[] {
   return tokenTerms
-    .filter((alts) => !(alts.some((t) => hasWord(text, t)) || hasNearWord(text, alts[0]!)))
+    .filter((alts) => {
+      const word = alts[0]!;
+      const friends = FALSE_FRIENDS[singular(word)] ?? FALSE_FRIENDS[word] ?? [];
+      const t = friends.reduce((acc, f) => acc.split(f).join(" "), text);
+      return !(alts.some((a) => hasWord(t, a)) || hasNearWord(t, word));
+    })
     .map((alts) => alts[0]!);
 }
 
@@ -294,10 +324,14 @@ export interface SearchPlan {
   typeTerms: string[];
   /** Per required word, what counts as matching it (wordCoverage). */
   coverTerms: string[][];
+  /** The required words that name a KIND of product ("cream", "earpiece",
+   *  "blender") — a result must match all of these, or it isn't what they
+   *  asked for at all. Other words ("bass", "pepper") are best-effort. */
+  typeWords: string[];
 }
 
 export function planSearch(query: string, knownBrands: readonly string[]): SearchPlan | null {
-  const { tokens, terms, norm, tokenTerms } = expandSearchTerms(query);
+  const { tokens, terms, norm, tokenTerms, context } = expandSearchTerms(query);
   if (terms.length === 0) return null;
   const { requested, brandTokens, mergedTerms, mergedTokens, typeTerms } = detectBrands(
     { tokens, terms, norm },
@@ -310,7 +344,10 @@ export function planSearch(query: string, knownBrands: readonly string[]): Searc
     brandNorms: new Set(requested.keys()),
     brandNames: [...requested.values()],
     typeTerms,
-    coverTerms: requiredWords(tokens, tokenTerms, brandTokens),
+    coverTerms: requiredWords(tokens, tokenTerms, brandTokens, context),
+    typeWords: tokens.filter(
+      (t, i) => !context[i] && !brandTokens.has(t) && (PRODUCT_WORDS.has(t) || PRODUCT_WORDS.has(singular(t))),
+    ),
   };
 }
 
@@ -390,12 +427,17 @@ export function selectHits<T extends { s: number; covered: number; missing: stri
   /** When partial: the asked-for words the best results don't mention. */
   missing: string[];
 } {
-  const relevant = scored.filter((x) => x.s > 0);
+  // A tripod is no answer to "face cream": drop anything that misses a product-
+  // type word. If that leaves nothing, we don't stock it — say so.
+  const relevant = scored.filter(
+    (x) => x.s > 0 && !x.missing.some((w) => plan.typeWords.includes(w)),
+  );
   const want = plan.coverTerms.length;
   const best = relevant.reduce((m, x) => Math.max(m, x.covered), 0);
   const kept = (want > 0 ? relevant.filter((x) => x.covered === best) : relevant)
     .sort((a, b) => b.s - a.s || Number(b.featured) - Number(a.featured))
     .slice(0, limit);
-  const partial = want > 0 && best < want;
+  // Nothing left is "not found", not a partial match.
+  const partial = kept.length > 0 && want > 0 && best < want;
   return { kept, partial, missing: partial ? (kept[0]?.missing ?? []) : [] };
 }

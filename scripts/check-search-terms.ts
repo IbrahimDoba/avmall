@@ -9,13 +9,7 @@
  * junk brands imports left behind ("Power", "Earbuds", "Shower").
  */
 
-import {
-  detectBrands,
-  expandSearchTerms,
-  normalizeText,
-  requiredWords,
-  wordCoverage,
-} from "@/lib/search-terms";
+import { detectBrands, expandSearchTerms, planSearch, scoreProduct, selectHits } from "@/lib/search-terms";
 
 const BRANDS = [
   "ORAIMO", "Oraimo", "Power", "Shower", "Flower", "Banana", "Earbuds", "Ousimor", "Men", "Telexon", "Itel",
@@ -68,7 +62,15 @@ const MATCH_CASES: [string, string[], boolean, string[]?][] = [
     false,
   ],
   // "Face" is a junk brand; it must still be required, or this is just "cream".
-  ["face cream", ["Neepho Neepho L12 Face Tracking Tripod", "Sokany 4 face cooking gas burner", "Face Face Brush", "Ice Ice Cream Bottle"], true],
+  // ...and with no real cream in stock, nothing: a tripod, a "4 face" burner or
+  // an ice-cream bottle is not a face cream, and the agent must say we don't stock it.
+  ["face cream", [], false],
+  // Descriptive words are best-effort: earpieces still come back, flagged partial.
+  ["earpiece good bass", ["ORAIMO Oraimo Conch Earpiece", "Itel Itel K9 Pro Earpiece"], true],
+  // Words after "for" / "and" / "with" are context, not requirements.
+  ["blender for pepper", ["Kenwood Commercial Grinder Blender"], false],
+  ["wireless mouse for laptop", ["Hp Wireless Mouse S9000"], false, ["Hp Wireless Mouse S9000", "Lenovo Laptop Bag", "C Idea Tablet wireless laptop"]],
+  ["iphone charger and cable", ["ORAIMO Oraimo Cannon 18s Iphone Chager"], false],
   // Thousands separators: "10,000mah" in the name, "10000mah" as typed.
   ["itel 10000mah", ["Itel Itel 10,000mah 12w powerpulse Powerbank"], false],
   ["rechargeable fan 16 inch", ["Solar Solar Fan 16 inches With Panel and Bulb"], false],
@@ -91,16 +93,30 @@ for (const [q, want] of BRAND_CASES) {
   check(JSON.stringify(got) === JSON.stringify(want), `brands  "${q}" → ${JSON.stringify(got)}`);
 }
 
+// The same planSearch → scoreProduct → selectHits the live search runs; only
+// the database candidate query is replaced by "every sample product".
 for (const [q, want, wantPartial, catalogue = CATALOGUE] of MATCH_CASES) {
-  const e = expandSearchTerms(q);
-  const need = requiredWords(e.tokens, e.tokenTerms, detectBrands(e, BRANDS).brandTokens);
-  const scored = catalogue.map((p) => ({ p, c: wordCoverage(normalizeText(p), need) })).filter((x) => x.c > 0);
-  const best = scored.reduce((m, x) => Math.max(m, x.c), 0);
-  const kept = scored.filter((x) => x.c === best).map((x) => x.p).sort();
-  const partial = need.length > 0 && best < need.length;
+  const plan = planSearch(q, BRANDS)!;
+  const scored = catalogue.map((name) => ({
+    name,
+    featured: false,
+    ...scoreProduct(plan, {
+      name,
+      brand: "",
+      shortDesc: "",
+      longDesc: "",
+      categoryName: "",
+      categorySlug: "",
+      tags: [],
+      inStock: true,
+      featured: false,
+    }),
+  }));
+  const { kept, partial } = selectHits(plan, scored, 50);
+  const names = kept.map((k) => k.name).sort();
   check(
-    JSON.stringify(kept) === JSON.stringify([...want].sort()) && partial === wantPartial,
-    `matches "${q}" → ${kept.length} kept${partial ? " (partial)" : ""}`,
+    JSON.stringify(names) === JSON.stringify([...want].sort()) && partial === wantPartial,
+    `matches "${q}" → ${names.length} kept${partial ? " (partial)" : ""}${names.length ? ": " + names.join(" | ") : ""}`,
   );
 }
 
