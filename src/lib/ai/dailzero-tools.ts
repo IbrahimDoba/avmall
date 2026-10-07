@@ -64,6 +64,9 @@ export type DailzeroChannel = "web" | "whatsapp";
 const WEB_HELP_NOTE =
   "If no order is found, or they say they paid and nothing came, don't promise that someone will help or ask them to wait: give them the support.whatsappLink from the response (or from get_store_info) exactly as given, so staff can check. Never build a wa.me link yourself, and never from the customer's own number.";
 
+const TBC_NOTE =
+  "When shipping is 'To be confirmed' (deliveryFeeConfirmedByStaff: true) we have no delivery price for that address: never quote, estimate or calculate one — tell the customer a member of our team will confirm the delivery fee with them.";
+
 const FACTS_NOTE =
   "Only state facts the tool returned. Never invent colours, sizes, specs, battery life, warranty, or whether something is 'original' — if the data doesn't say, say you don't have that detail and offer the product link.";
 
@@ -204,7 +207,8 @@ export function buildAvmallTools(
       description: [
         "Delivery fee and delivery time to one Nigerian state, optionally a specific LGA/area within it (some areas, e.g. parts of Kaduna, are priced differently from the rest of the state — pass lga whenever the customer names one).",
         "Accepts messy state names ('abuja', 'lagos state', 'Akwa-Ibom') and returns matchedState: reuse that EXACT value as state in quote_cart and create_order so the totals agree.",
-        "May return unavailable: true when we do not deliver there — then say so and offer the WhatsApp contact; never make up a fee. If areaMatched is false, the fee is the state's general rate, not a price for that area: follow areaMessage.",
+        TBC_NOTE,
+        "If areaMatched is false, the fee is the state's general rate, not a price for that area: follow areaMessage.",
         MONEY_NOTE,
       ].join(" "),
       parameters: [
@@ -240,6 +244,7 @@ export function buildAvmallTools(
         "The AUTHORITATIVE total for a set of items: subtotal, bulk discount, coupon discount, delivery and total, using live prices and stock.",
         "ALWAYS call this before telling the customer a total; never add prices up yourself. Pass the matchedState from quote_shipping as state.",
         "Only price what the customer actually chose. If they are still comparing options, ask which one first: never add alternatives together into one total.",
+        TBC_NOTE,
         "It prices items but does NOT check stock, so confirm inStock with search_products or get_product first. An error naming a product means that slug does not exist.",
         MONEY_NOTE,
       ].join(" "),
@@ -288,6 +293,7 @@ export function buildAvmallTools(
       description: [
         "Place a REAL order (unpaid, stock held for the customer). Only call after the customer has clearly confirmed the items, the delivery address and the total you got from quote_cart. Charges catalogue prices plus any coupon.",
         "Returns the order number (AVM-…) and total. Then call create_payment_link to collect payment.",
+        "If the order comes back with delivery 'To be confirmed', its total is for the items only: tell the customer a member of our team will confirm the delivery fee with them.",
         "Pass the same idempotencyKey if you retry, so the customer is never charged for two orders.",
         MONEY_NOTE,
       ].join(" "),
